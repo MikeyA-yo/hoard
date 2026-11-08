@@ -1,0 +1,25 @@
+[package]
+name = "hoard-core"
+description = "Disk usage scanning, accounting and cleanup engine for Hoard"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+crossbeam-channel = "0.5.17"
+jwalk = "0.9.0"
+serde = { version = "1.0.229", features = ["derive"] }
+thiserror = "2.0.21"
+tracing = "0.1.44"
+
+[target."cfg(windows)".dependencies]
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }
+
+[dev-dependencies]
+criterion = "0.8.2"
+tempfile = "3.27.0"
+
+[[bench]]
+name = "scan"
+harness = false
