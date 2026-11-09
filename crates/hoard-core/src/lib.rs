@@ -20,6 +20,7 @@ pub mod cleanup;
 pub mod disks;
 pub mod error;
 pub mod format;
+pub mod lenses;
 pub mod platform;
 pub mod rules;
 pub mod scan;

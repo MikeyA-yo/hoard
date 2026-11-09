@@ -7,8 +7,12 @@ import type {
   Batch,
   CleanupMode,
   CleanupProgress,
+  CategoryTotal,
   CleanupReport,
+  Projects,
   Suggestions,
+  TrashSize,
+  Category,
   Tray,
   ChildrenPage,
   Disk,
@@ -52,6 +56,11 @@ export const api = {
   cancelCleanup: (runId: string) => invoke<boolean>("cancel_cleanup", { runId }),
 
   getSuggestions: () => invoke<Suggestions>("get_suggestions"),
+  getFileTypes: () => invoke<CategoryTotal[]>("get_file_types"),
+  getCategoryFiles: (category: Category, limit: number, mode: SizeMode) =>
+    invoke<LargestItem[]>("get_category_files", { category, limit, mode }),
+  getProjects: () => invoke<Projects>("get_projects"),
+  getTrashSize: () => invoke<TrashSize | null>("get_trash_size"),
   /** `ruleId` null adds every Safe item; only Safe rules can be bulk-added. */
   addSuggestionsToTray: (ruleId: string | null) => invoke<Tray>("add_suggestions_to_tray", { ruleId }),
 };

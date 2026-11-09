@@ -133,6 +133,23 @@ fn win_err(e: windows::core::Error) -> io::Error {
     }
 }
 
+/// Total size and item count of the Recycle Bins on all drives.
+pub(super) fn recycle_bin_size() -> Option<(u64, u64)> {
+    use windows::Win32::UI::Shell::{SHQueryRecycleBinW, SHQUERYRBINFO};
+    let mut info = SHQUERYRBINFO {
+        cbSize: size_of::<SHQUERYRBINFO>() as u32,
+        i64Size: 0,
+        i64NumItems: 0,
+    };
+    // SAFETY: a null root path means "all drives"; `info` is a valid out
+    // parameter with cbSize set as the API requires.
+    unsafe { SHQueryRecycleBinW(PCWSTR::null(), &mut info) }.ok()?;
+    Some((
+        u64::try_from(info.i64Size).unwrap_or(0),
+        u64::try_from(info.i64NumItems).unwrap_or(0),
+    ))
+}
+
 fn is_name_surrogate(handle: &OwnedHandle) -> io::Result<bool> {
     let mut tag = FILE_ATTRIBUTE_TAG_INFO::default();
     // SAFETY: valid handle, buffer and size match FILE_ATTRIBUTE_TAG_INFO.
@@ -254,6 +271,12 @@ mod tests {
             ERROR_SHARING_VIOLATION.to_hresult(),
         ));
         assert_eq!(e.raw_os_error(), Some(ERROR_SHARING_VIOLATION.0 as i32));
+    }
+
+    #[test]
+    fn recycle_bin_size_is_readable() {
+        // Read-only query; the numbers depend on the machine.
+        assert!(recycle_bin_size().is_some());
     }
 
     #[test]

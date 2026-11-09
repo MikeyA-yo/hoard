@@ -17,13 +17,15 @@ use hoard_core::{LargestKind, NodeId, ScanEvent, ScanOptions, SizeMode, SortKey,
 use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::dto::SuggestionsDto;
 use crate::dto::{
     BatchDto, BatchEntryDto, ChildrenPageDto, CleanupProgressDto, CleanupReportDto, CrumbDto,
     DiskDto, DoneDto, ErrorDto, ErrorsPageDto, LargestItemDto, NodeDetailDto, NodeDto, ProgressDto,
     ScanOptsDto, SummaryDto, TrayDto, TreemapDto,
 };
+use crate::dto::{CategoryTotalDto, ProjectsDto, SuggestionsDto, TrashSizeDto};
 use crate::state::{describe_add, AppState};
+use hoard_core::classify::Category;
+use hoard_core::lenses;
 
 /// Upper bound for `get_largest`.
 const MAX_LARGEST: usize = 1_000;
@@ -466,6 +468,58 @@ pub async fn add_suggestions_to_tray(
         },
         |tree| cleanup_context(&app, tree),
     )
+}
+
+// ------------------------------------------------------------------ lenses
+
+/// Totals per file category (File types lens).
+#[tauri::command]
+pub async fn get_file_types(state: State<'_, AppState>) -> CmdResult<Vec<CategoryTotalDto>> {
+    let r = state.result()?;
+    let tree = r.read()?;
+    Ok(lenses::file_types(&tree)
+        .iter()
+        .map(CategoryTotalDto::from)
+        .collect())
+}
+
+/// Largest files of one category.
+#[tauri::command]
+pub async fn get_category_files(
+    state: State<'_, AppState>,
+    category: Category,
+    limit: usize,
+    mode: SizeMode,
+) -> CmdResult<Vec<LargestItemDto>> {
+    let r = state.result()?;
+    let tree = r.read()?;
+    Ok(
+        lenses::largest_in_category(&tree, category, limit.min(MAX_LARGEST), mode)
+            .into_iter()
+            .filter_map(|id| {
+                Some(LargestItemDto {
+                    node: NodeDto::new(&tree, id)?,
+                    path: tree.path(id)?.to_string_lossy().into_owned(),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Dev artifacts grouped by project (Projects lens).
+#[tauri::command]
+pub async fn get_projects(state: State<'_, AppState>) -> CmdResult<ProjectsDto> {
+    let rules = builtin_rules()?;
+    let r = state.result()?;
+    let tree = r.read()?;
+    let matches = suggest(&tree, rules, &MatchContext::current());
+    Ok(ProjectsDto::new(&tree, &lenses::projects(&tree, &matches)))
+}
+
+/// Current size of the Recycle Bin / Trash, if measurable. Read-only.
+#[tauri::command]
+pub async fn get_trash_size() -> CmdResult<Option<TrashSizeDto>> {
+    Ok(hoard_core::platform::trash_size().map(|(bytes, items)| TrashSizeDto { bytes, items }))
 }
 
 // ------------------------------------------------------------------ cleanup

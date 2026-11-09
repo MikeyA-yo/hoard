@@ -149,3 +149,115 @@
   padding: 2px 10px;
   font-size: 12px;
 }
+.sugg-filter {
+  margin-bottom: 12px;
+}
+.trash-note {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+/* Projects lens */
+.project-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.project {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.project-top {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.project-name {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+.project-name .path {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+}
+.activity {
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.activity.inactive {
+  color: var(--review);
+}
+.artifacts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+.artifact {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 4px 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+/* File types lens */
+.file-types {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+}
+.type-list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  width: 300px;
+  flex: none;
+  overflow: auto;
+  border-right: 1px solid var(--border);
+}
+.type-list li {
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.type-list li:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+.type-list li.on {
+  background: var(--accent-soft);
+}
+.type-top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.type-name {
+  flex: 1;
+}
+.type-files {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  padding: 12px 16px;
+}
+.type-files h3 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}

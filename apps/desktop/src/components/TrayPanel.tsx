@@ -16,6 +16,7 @@ export function TrayPanel() {
   const clearTray = useHoard((s) => s.clearTray);
   const cancelCleanup = useHoard((s) => s.cancelCleanup);
   const dismissCleanup = useHoard((s) => s.dismissCleanup);
+  const trashSize = useHoard((s) => s.trashSize);
   const [allowPermanent, setAllowPermanent] = useState(false);
   const [confirming, setConfirming] = useState<CleanupMode | null>(null);
 
@@ -38,7 +39,12 @@ export function TrayPanel() {
   }
 
   if (cleanup?.status === "done") {
-    return <ReportView report={cleanup.report} onDismiss={dismissCleanup} />;
+    return (
+      <>
+        <ReportView report={cleanup.report} onDismiss={dismissCleanup} />
+        <TrashNote bytes={trashSize?.bytes ?? 0} items={trashSize?.items ?? 0} />
+      </>
+    );
   }
 
   return (
@@ -110,6 +116,8 @@ export function TrayPanel() {
           </div>
         </>
       )}
+
+      <TrashNote bytes={trashSize?.bytes ?? 0} items={trashSize?.items ?? 0} />
 
       {confirming && tray && tray.count > 0 && (
         <ConfirmDialog tray={tray} mode={confirming} onClose={() => setConfirming(null)} />
@@ -227,6 +235,16 @@ function ReportView({ report, onDismiss }: { report: CleanupReport; onDismiss: (
       <p className="muted small">Every action is recorded in the action log in Hoard's app data folder.</p>
       <button onClick={onDismiss}>Done</button>
     </div>
+  );
+}
+
+function TrashNote({ bytes, items }: { bytes: number; items: number }) {
+  if (bytes <= 0) return null;
+  return (
+    <p className="trash-note">
+      The {BIN} holds <strong>{formatBytes(bytes)}</strong> ({formatCount(items)} items). That space is only freed
+      when the {BIN} is emptied{IS_MAC ? " (Finder, Empty Trash)" : " (right-click the Recycle Bin on the desktop, Empty Recycle Bin)"}.
+    </p>
   );
 }
 

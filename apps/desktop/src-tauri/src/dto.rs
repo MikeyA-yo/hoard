@@ -4,6 +4,7 @@
 use hoard_core::classify::{category_for, Category};
 use hoard_core::cleanup::{CleanupMode, CleanupReport, Tray};
 use hoard_core::disks::DiskInfo;
+use hoard_core::lenses::{CategoryTotal, Project};
 use hoard_core::rules::{Group as RuleGroupKind, RuleMatches, Safety};
 use hoard_core::view::{TreemapNode, MAX_VIEW_ITEMS};
 use hoard_core::{NodeId, NodeKind, ScanError, ScanErrorKind, SizeMode, Tree};
@@ -169,6 +170,104 @@ impl SuggestionsDto {
                 .collect(),
         }
     }
+}
+
+// ------------------------------------------------------------------ lenses
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CategoryTotalDto {
+    pub category: Category,
+    pub size_allocated: u64,
+    pub size_apparent: u64,
+    pub files: u64,
+}
+
+impl From<&CategoryTotal> for CategoryTotalDto {
+    fn from(c: &CategoryTotal) -> Self {
+        CategoryTotalDto {
+            category: c.category,
+            size_allocated: c.size_allocated,
+            size_apparent: c.size_apparent,
+            files: c.files,
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ArtifactDto {
+    pub node: NodeDto,
+    pub path: String,
+    pub rule_id: String,
+    pub rule_name: String,
+    pub safety: Safety,
+    pub addable: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectDto {
+    pub root: NodeDto,
+    pub path: String,
+    pub last_activity: i64,
+    pub total_allocated: u64,
+    pub total_apparent: u64,
+    pub artifacts: Vec<ArtifactDto>,
+}
+
+/// Projects listed per request; the rest are counted.
+pub const MAX_PROJECTS: usize = 1_000;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectsDto {
+    pub projects: Vec<ProjectDto>,
+    pub count: usize,
+    pub total_allocated: u64,
+}
+
+impl ProjectsDto {
+    pub fn new(tree: &Tree, projects: &[Project]) -> Self {
+        ProjectsDto {
+            count: projects.len(),
+            total_allocated: projects.iter().map(|p| p.total_allocated).sum(),
+            projects: projects
+                .iter()
+                .take(MAX_PROJECTS)
+                .filter_map(|p| {
+                    Some(ProjectDto {
+                        root: NodeDto::new(tree, p.root)?,
+                        path: tree.path(p.root)?.to_string_lossy().into_owned(),
+                        last_activity: p.last_activity,
+                        total_allocated: p.total_allocated,
+                        total_apparent: p.total_apparent,
+                        artifacts: p
+                            .artifacts
+                            .iter()
+                            .filter_map(|a| {
+                                Some(ArtifactDto {
+                                    node: NodeDto::new(tree, a.node)?,
+                                    path: tree.path(a.node)?.to_string_lossy().into_owned(),
+                                    rule_id: a.rule_id.clone(),
+                                    rule_name: a.rule_name.clone(),
+                                    safety: a.safety,
+                                    addable: a.addable,
+                                })
+                            })
+                            .collect(),
+                    })
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrashSizeDto {
+    pub bytes: u64,
+    pub items: u64,
 }
 
 // ------------------------------------------------------------------ cleanup

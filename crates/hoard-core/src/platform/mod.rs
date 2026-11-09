@@ -51,6 +51,19 @@ pub fn stat(path: &Path) -> io::Result<EntryMeta> {
     imp::stat(path)
 }
 
+/// Size of the Recycle Bin / Trash: `(bytes, items)`, or `None` where it
+/// cannot be measured cheaply. Read-only; Hoard never empties it.
+pub fn trash_size() -> Option<(u64, u64)> {
+    #[cfg(windows)]
+    {
+        windows::recycle_bin_size()
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
 /// Absolute paths of pseudo / virtual filesystems that are never scanned
 /// (`/proc`, `/sys`, `/dev`, ...). They are dropped from the tree entirely.
 pub fn pseudo_fs_paths() -> &'static [&'static str] {

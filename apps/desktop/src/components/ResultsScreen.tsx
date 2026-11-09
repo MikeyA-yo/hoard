@@ -7,6 +7,8 @@ import { ChildList } from "./ChildList";
 import { ErrorsPanel, LargestPanel } from "./SidePanels";
 import { TrayPanel } from "./TrayPanel";
 import { SuggestionsView } from "./SuggestionsView";
+import { ProjectsView } from "./ProjectsView";
+import { FileTypesView } from "./FileTypesView";
 
 const TABS: { key: SideTab; label: string }[] = [
   { key: "contents", label: "Contents" },
@@ -115,6 +117,12 @@ export function ResultsScreen() {
           <button className={mainView === "suggestions" ? "on" : ""} onClick={() => setMainView("suggestions")}>
             Suggestions
           </button>
+          <button className={mainView === "projects" ? "on" : ""} onClick={() => setMainView("projects")}>
+            Projects
+          </button>
+          <button className={mainView === "types" ? "on" : ""} onClick={() => setMainView("types")}>
+            File types
+          </button>
         </div>
         <div className="segmented" role="group" aria-label="Size mode">
           <button className={mode === "allocated" ? "on" : ""} onClick={() => setMode("allocated")} title="Space actually used on disk">
@@ -124,6 +132,7 @@ export function ResultsScreen() {
             Apparent
           </button>
         </div>
+        {mainView === "map" && (
         <div className="segmented" role="group" aria-label="Color by">
           <button className={colorBy === "category" ? "on" : ""} onClick={() => setColorBy("category")}>
             Type
@@ -132,6 +141,7 @@ export function ResultsScreen() {
             Age
           </button>
         </div>
+        )}
         <button onClick={() => void startScan(summary.rootPath, scanOpts)} disabled={cleaning}>
           Rescan
         </button>
@@ -160,7 +170,10 @@ export function ResultsScreen() {
       </nav>
 
       <main className="workspace">
-        {mainView === "map" ? <TreemapView /> : <SuggestionsView />}
+        {mainView === "map" && <TreemapView />}
+        {mainView === "suggestions" && <SuggestionsView />}
+        {mainView === "projects" && <ProjectsView />}
+        {mainView === "types" && <FileTypesView />}
         <aside className="side">
           <div className="tabs" role="tablist">
             {TABS.map((t) => (

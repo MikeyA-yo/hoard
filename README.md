@@ -11,7 +11,7 @@ how the code is organised.
 | M0 Core + CLI | Done |
 | M1 Desktop viewer | Done (Windows verified; macOS/Linux untested) |
 | M2 Cleanup | Done (Windows verified; real Recycle Bin test is manual) |
-| M3 Lenses + suggestions | In progress: rules engine and Suggestions view done; File types, Dev artifacts and Caches lenses not yet |
+| M3 Lenses + suggestions | Done (Windows verified) |
 | M4 Apps, duplicates, history | Not started |
 | M5 Platform depth | Not started |
 
@@ -88,6 +88,14 @@ information-only rules (Docker/WSL disks, the Go module cache) can never be
 added. Docker and WSL virtual disks, and folders containing them, are also on
 the protected list. Every rule has a match and near-miss test in
 `crates/hoard-core/tests/rules.rs`.
+
+Lenses (the view switcher in the top bar): **Map** (folders), **Suggestions**
+(filterable by dev projects, caches and system, downloads), **Projects**
+(build and dependency folders per project, with last source-file activity;
+sort by least recently active to find abandoned projects) and **File types**
+(totals per category, then the largest files of one). The Tray shows how much
+the Recycle Bin is holding, since that space is only freed once it is
+emptied.
 
 ## Development
 

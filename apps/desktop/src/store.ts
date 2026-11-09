@@ -7,6 +7,7 @@ import type {
   CleanupReport,
   Suggestions,
   Tray,
+  TrashSize,
   ColorBy,
   Disk,
   Done,
@@ -21,7 +22,7 @@ import type {
 } from "./types";
 
 export type Screen = "home" | "scanning" | "results";
-export type MainView = "map" | "suggestions";
+export type MainView = "map" | "suggestions" | "projects" | "types";
 export type SideTab = "contents" | "files" | "dirs" | "errors" | "tray";
 
 /** A cleanup run. `runId` is generated here before the backend is called. */
@@ -74,6 +75,7 @@ interface HoardState {
   mainView: MainView;
   suggestions: Suggestions | null;
   suggestionsLoading: boolean;
+  trashSize: TrashSize | null;
 
   loadTargets: () => Promise<void>;
   startScan: (path: string, opts?: ScanOpts) => Promise<void>;
@@ -109,6 +111,7 @@ interface HoardState {
   setMainView: (v: MainView) => void;
   loadSuggestions: () => Promise<void>;
   addSuggestions: (ruleId: string | null) => Promise<void>;
+  loadTrashSize: () => Promise<void>;
 }
 
 /** True if `next` should replace `cur`: a newer scan, or a newer version of the same scan's tray. */
@@ -157,6 +160,7 @@ export const useHoard = create<HoardState>()((set, get) => ({
   mainView: "map",
   suggestions: null,
   suggestionsLoading: false,
+  trashSize: null,
 
   loadTargets: async () => {
     try {
@@ -224,6 +228,7 @@ export const useHoard = create<HoardState>()((set, get) => ({
       suggestions: null,
     });
     if (get().mainView === "suggestions") void get().loadSuggestions();
+    void get().loadTrashSize();
     void get().navigate(d.summary.rootId);
     // A new scan starts a new (empty) tray on the backend.
     void get().refreshTray();
@@ -362,6 +367,7 @@ export const useHoard = create<HoardState>()((set, get) => ({
       set({ summary });
       await get().refreshTray();
       if (get().suggestions) void get().loadSuggestions();
+      void get().loadTrashSize();
       const cur = get().currentId;
       if (cur !== null) {
         const d = await api.getNode(cur);
@@ -402,6 +408,14 @@ export const useHoard = create<HoardState>()((set, get) => ({
       if (token === suggestionsToken) get().showToast(errorMessage(e));
     } finally {
       if (token === suggestionsToken) set({ suggestionsLoading: false });
+    }
+  },
+
+  loadTrashSize: async () => {
+    try {
+      set({ trashSize: await api.getTrashSize() });
+    } catch {
+      set({ trashSize: null });
     }
   },
 

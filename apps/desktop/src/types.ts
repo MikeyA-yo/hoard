@@ -227,3 +227,42 @@ export interface Suggestions {
   reviewTotal: number;
   cautionTotal: number;
 }
+
+// ------------------------------------------------------------------ lenses
+
+export interface CategoryTotal {
+  category: Category;
+  sizeAllocated: number;
+  sizeApparent: number;
+  files: number;
+}
+
+export interface Artifact {
+  node: NodeInfo;
+  path: string;
+  ruleId: string;
+  ruleName: string;
+  safety: Safety;
+  addable: boolean;
+}
+
+export interface Project {
+  root: NodeInfo;
+  path: string;
+  /** Newest source file change, unix seconds (0 if none). */
+  lastActivity: number;
+  totalAllocated: number;
+  totalApparent: number;
+  artifacts: Artifact[];
+}
+
+export interface Projects {
+  projects: Project[];
+  count: number;
+  totalAllocated: number;
+}
+
+export interface TrashSize {
+  bytes: number;
+  items: number;
+}

@@ -19,7 +19,7 @@ tracing = "0.1.44"
 trash = "5.3.0"
 
 [target."cfg(windows)".dependencies]
-windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security"] }
+windows = { version = "0.62.2", features = ["Win32_Foundation", "Win32_Storage_FileSystem", "Win32_Security", "Win32_UI_Shell"] }
 
 [dev-dependencies]
 criterion = "0.8.2"

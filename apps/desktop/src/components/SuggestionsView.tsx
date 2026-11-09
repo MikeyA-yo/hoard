@@ -4,7 +4,15 @@
 import { useState } from "react";
 import { useHoard } from "../store";
 import { formatAge, formatBytes, formatCount } from "../lib/format";
-import type { Safety, SuggestionGroup } from "../types";
+import type { RuleGroupKind, Safety, SuggestionGroup } from "../types";
+
+type Filter = "all" | "dev" | "caches" | "downloads";
+const FILTERS: { key: Filter; label: string; groups: RuleGroupKind[] }[] = [
+  { key: "all", label: "All", groups: ["dev", "packages", "caches", "downloads", "temp", "system"] },
+  { key: "dev", label: "Dev projects", groups: ["dev"] },
+  { key: "caches", label: "Caches & system", groups: ["packages", "caches", "temp", "system"] },
+  { key: "downloads", label: "Downloads", groups: ["downloads"] },
+];
 
 const SAFETY_LABEL: Record<Safety, string> = { safe: "Safe", review: "Review", caution: "Caution" };
 const SAFETY_HELP: Record<Safety, string> = {
@@ -20,6 +28,7 @@ export function SuggestionsView() {
   const loadSuggestions = useHoard((s) => s.loadSuggestions);
   const addSuggestions = useHoard((s) => s.addSuggestions);
   const cleaning = useHoard((s) => s.cleanup?.status === "running");
+  const [filter, setFilter] = useState<Filter>("all");
 
   if (!suggestions) {
     return <div className="placeholder">{loading ? "Looking for reclaimable space…" : "No suggestions loaded."}</div>;
@@ -51,10 +60,20 @@ export function SuggestionsView() {
         item is checked again just before removal. Sizes are on disk, as of the scan.
       </p>
 
+      <div className="segmented sugg-filter" role="group" aria-label="Show">
+        {FILTERS.map((f) => (
+          <button key={f.key} className={filter === f.key ? "on" : ""} onClick={() => setFilter(f.key)}>
+            {f.label}
+          </button>
+        ))}
+      </div>
+
       {suggestions.groups.length === 0 ? (
         <div className="placeholder">Nothing here matched the built-in rules. Try the Map view or Largest files.</div>
       ) : (
-        suggestions.groups.map((g) => <GroupCard key={g.ruleId} group={g} disabled={cleaning} />)
+        suggestions.groups
+          .filter((g) => FILTERS.find((f) => f.key === filter)?.groups.includes(g.group))
+          .map((g) => <GroupCard key={g.ruleId} group={g} disabled={cleaning} />)
       )}
     </div>
   );
