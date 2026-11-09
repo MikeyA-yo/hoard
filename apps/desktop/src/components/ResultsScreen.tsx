@@ -5,12 +5,14 @@ import { sizeOf } from "../types";
 import { TreemapView } from "./TreemapView";
 import { ChildList } from "./ChildList";
 import { ErrorsPanel, LargestPanel } from "./SidePanels";
+import { TrayPanel } from "./TrayPanel";
 
 const TABS: { key: SideTab; label: string }[] = [
   { key: "contents", label: "Contents" },
   { key: "files", label: "Largest files" },
   { key: "dirs", label: "Largest folders" },
   { key: "errors", label: "Errors" },
+  { key: "tray", label: "Tray" },
 ];
 
 function isTyping(target: EventTarget | null): boolean {
@@ -31,6 +33,8 @@ export function ResultsScreen() {
   const goHome = useHoard((s) => s.goHome);
   const startScan = useHoard((s) => s.startScan);
   const scanOpts = useHoard((s) => s.scanOpts);
+  const trayCount = useHoard((s) => s.tray?.count ?? 0);
+  const cleaning = useHoard((s) => s.cleanup?.status === "running");
 
   // Keyboard: arrows move selection, Enter drills in, Backspace goes up.
   useEffect(() => {
@@ -60,6 +64,14 @@ export function ResultsScreen() {
           e.preventDefault();
           s.goUp();
           break;
+        case " ":
+        case "Spacebar":
+          // Space adds the selected item to the Cleanup Tray.
+          if (s.selectedId !== null) {
+            e.preventDefault();
+            void s.addToTray([s.selectedId]);
+          }
+          break;
         case "Escape":
           s.select(null);
           break;
@@ -75,7 +87,7 @@ export function ResultsScreen() {
   return (
     <div className="results">
       <header className="topbar">
-        <button className="ghost" onClick={goHome} title="Back to drive list">
+        <button className="ghost" onClick={goHome} title="Back to drive list" disabled={cleaning}>
           ← Drives
         </button>
         <div className="topbar-title">
@@ -109,7 +121,9 @@ export function ResultsScreen() {
             Age
           </button>
         </div>
-        <button onClick={() => void startScan(summary.rootPath, scanOpts)}>Rescan</button>
+        <button onClick={() => void startScan(summary.rootPath, scanOpts)} disabled={cleaning}>
+          Rescan
+        </button>
       </header>
 
       <nav className="crumbs" aria-label="Breadcrumbs">
@@ -142,6 +156,7 @@ export function ResultsScreen() {
               <button key={t.key} role="tab" aria-selected={sideTab === t.key} className={sideTab === t.key ? "tab on" : "tab"} onClick={() => setSideTab(t.key)}>
                 {t.label}
                 {t.key === "errors" && summary.errorCount > 0 ? ` (${formatCount(summary.errorCount)})` : ""}
+                {t.key === "tray" ? ` (${formatCount(trayCount)})` : ""}
               </button>
             ))}
           </div>
@@ -150,6 +165,7 @@ export function ResultsScreen() {
             {sideTab === "files" && <LargestPanel kind="files" />}
             {sideTab === "dirs" && <LargestPanel kind="dirs" />}
             {sideTab === "errors" && <ErrorsPanel />}
+            {sideTab === "tray" && <TrayPanel />}
           </div>
         </aside>
       </main>

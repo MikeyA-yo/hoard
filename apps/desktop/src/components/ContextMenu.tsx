@@ -7,6 +7,9 @@ export function ContextMenu() {
   const menu = useHoard((s) => s.contextMenu);
   const close = useHoard((s) => s.openContextMenu);
   const navigate = useHoard((s) => s.navigate);
+  const inTray = useHoard((s) => (menu ? (s.tray?.items.some((i) => i.node.id === menu.id) ?? false) : false));
+  const addToTray = useHoard((s) => s.addToTray);
+  const removeFromTray = useHoard((s) => s.removeFromTray);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -51,6 +54,16 @@ export function ContextMenu() {
       <button role="menuitem" onClick={run(() => void nodeActions.copyPath(menu.id))}>
         Copy path
       </button>
+      <hr />
+      {inTray ? (
+        <button role="menuitem" onClick={run(() => void removeFromTray([menu.id]))}>
+          Remove from Cleanup Tray
+        </button>
+      ) : (
+        <button role="menuitem" onClick={run(() => void addToTray([menu.id]))}>
+          Add to Cleanup Tray
+        </button>
+      )}
     </div>
   );
 }

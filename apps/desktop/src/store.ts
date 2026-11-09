@@ -2,6 +2,10 @@ import { create } from "zustand";
 import { api, errorMessage } from "./api";
 import type {
   BatchEntry,
+  CleanupMode,
+  CleanupProgress,
+  CleanupReport,
+  Tray,
   ColorBy,
   Disk,
   Done,
@@ -16,7 +20,13 @@ import type {
 } from "./types";
 
 export type Screen = "home" | "scanning" | "results";
-export type SideTab = "contents" | "files" | "dirs" | "errors";
+export type SideTab = "contents" | "files" | "dirs" | "errors" | "tray";
+
+/** A cleanup run. `runId` is generated here before the backend is called. */
+export type CleanupRun =
+  | { runId: string; mode: CleanupMode; status: "running"; progress: CleanupProgress | null }
+  | { runId: string; mode: CleanupMode; status: "done"; report: CleanupReport }
+  | { runId: string; mode: CleanupMode; status: "error"; error: string };
 
 const PAGE_SIZE = 300;
 
@@ -57,6 +67,8 @@ interface HoardState {
   sideTab: SideTab;
   contextMenu: ContextMenuState | null;
   toast: string | null;
+  tray: Tray | null;
+  cleanup: CleanupRun | null;
 
   loadTargets: () => Promise<void>;
   startScan: (path: string, opts?: ScanOpts) => Promise<void>;
@@ -66,7 +78,7 @@ interface HoardState {
   onDone: (d: Done) => void;
   goHome: () => void;
 
-  navigate: (id: number) => Promise<void>;
+  navigate: (id: number, opts?: { keepTab?: boolean }) => Promise<void>;
   goUp: () => void;
   loadMoreChildren: () => Promise<void>;
   select: (id: number | null) => void;
@@ -77,6 +89,30 @@ interface HoardState {
   setSideTab: (t: SideTab) => void;
   openContextMenu: (m: ContextMenuState | null) => void;
   showToast: (msg: string) => void;
+
+  /** Applies a tray response only if it is newer than what is shown. */
+  applyTray: (t: Tray) => void;
+  refreshTray: () => Promise<void>;
+  addToTray: (ids: number[]) => Promise<void>;
+  removeFromTray: (ids: number[]) => Promise<void>;
+  clearTray: () => Promise<void>;
+  runCleanup: (mode: CleanupMode, confirmation: string | null) => Promise<void>;
+  cancelCleanup: () => Promise<void>;
+  onCleanupProgress: (p: CleanupProgress) => void;
+  dismissCleanup: () => void;
+}
+
+/** True if `next` should replace `cur`: a newer scan, or a newer version of the same scan's tray. */
+export function isNewerTray(cur: Tray | null, next: Tray): boolean {
+  if (!cur) return true;
+  if (next.generation !== cur.generation) return next.generation > cur.generation;
+  return next.version >= cur.version;
+}
+
+function newRunId(): string {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `run-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
@@ -106,6 +142,8 @@ export const useHoard = create<HoardState>()((set, get) => ({
   sideTab: "contents",
   contextMenu: null,
   toast: null,
+  tray: null,
+  cleanup: null,
 
   loadTargets: async () => {
     try {
@@ -172,6 +210,8 @@ export const useHoard = create<HoardState>()((set, get) => ({
       mode: d.summary.sizeMode,
     });
     void get().navigate(d.summary.rootId);
+    // A new scan starts a new (empty) tray on the backend.
+    void get().refreshTray();
   },
 
   goHome: () => {
@@ -179,13 +219,14 @@ export const useHoard = create<HoardState>()((set, get) => ({
     void get().loadTargets();
   },
 
-  navigate: async (id) => {
+  navigate: async (id, opts) => {
     set({ currentId: id, selectedId: null, contextMenu: null });
     const { sort, mode } = get();
     try {
       const [detail, page] = await Promise.all([api.getNode(id), api.getChildren(id, sort, mode, 0, PAGE_SIZE)]);
       if (get().currentId !== id) return;
-      set({ detail, children: page.items, childrenTotal: page.total, sideTab: "contents" });
+      set({ detail, children: page.items, childrenTotal: page.total });
+      if (!opts?.keepTab) set({ sideTab: "contents" });
     } catch (e) {
       get().showToast(errorMessage(e));
     }
@@ -239,6 +280,94 @@ export const useHoard = create<HoardState>()((set, get) => ({
     set({ toast: msg });
     if (toastTimer) clearTimeout(toastTimer);
     toastTimer = setTimeout(() => set({ toast: null }), 3500);
+  },
+
+  applyTray: (t) => {
+    if (isNewerTray(get().tray, t)) set({ tray: t });
+  },
+
+  refreshTray: async () => {
+    try {
+      get().applyTray(await api.trayList());
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
+  },
+
+  addToTray: async (ids) => {
+    if (ids.length === 0) return;
+    const before = get().tray?.count ?? 0;
+    try {
+      const t = await api.trayAdd(ids);
+      get().applyTray(t);
+      const added = t.count - before;
+      if (added > 0) {
+        get().showToast(`Added to Cleanup Tray (${t.count} item${t.count === 1 ? "" : "s"} in tray)`);
+      } else if (t.notes[0]) {
+        get().showToast(t.notes[0]);
+      }
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
+  },
+
+  removeFromTray: async (ids) => {
+    try {
+      get().applyTray(await api.trayRemove(ids));
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
+  },
+
+  clearTray: async () => {
+    try {
+      get().applyTray(await api.trayClear());
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
+  },
+
+  runCleanup: async (mode, confirmation) => {
+    if (get().cleanup?.status === "running") return;
+    // The id exists before the backend is called, so every progress event
+    // for this run is recognised; the report arrives as the call's result.
+    const runId = newRunId();
+    set({ cleanup: { runId, mode, status: "running", progress: null }, sideTab: "tray" });
+    let report: CleanupReport;
+    try {
+      report = await api.executeCleanup(runId, mode, confirmation);
+    } catch (e) {
+      if (get().cleanup?.runId === runId) set({ cleanup: { runId, mode, status: "error", error: errorMessage(e) } });
+      return;
+    }
+    if (get().cleanup?.runId === runId) set({ cleanup: { runId, mode, status: "done", report } });
+    // The tree was updated in place; refresh totals, tray and the view.
+    try {
+      const summary = await api.getSummary();
+      set({ summary });
+      await get().refreshTray();
+      const cur = get().currentId;
+      if (cur !== null) {
+        const d = await api.getNode(cur);
+        await get().navigate(d.node.flags.includes("removed") ? summary.rootId : cur, { keepTab: true });
+      }
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
+  },
+
+  cancelCleanup: async () => {
+    const run = get().cleanup;
+    if (run?.status === "running") await api.cancelCleanup(run.runId);
+  },
+
+  onCleanupProgress: (p) => {
+    const run = get().cleanup;
+    if (run?.status === "running" && run.runId === p.runId) set({ cleanup: { ...run, progress: p } });
+  },
+
+  dismissCleanup: () => {
+    if (get().cleanup?.status !== "running") set({ cleanup: null });
   },
 }));
 

@@ -1,0 +1,202 @@
+/* Cleanup tray, confirmation dialog and report. */
+
+/* Five side tabs: keep labels on one line. */
+.tabs .tab {
+  white-space: nowrap;
+  font-size: 12px;
+  padding: 9px 4px;
+}
+
+button.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #0b1220;
+  font-weight: 600;
+}
+button.primary:hover:not(:disabled) {
+  background: #6aadf3;
+  border-color: #6aadf3;
+}
+button.danger {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #1a0b0b;
+  font-weight: 600;
+}
+button.danger:hover:not(:disabled) {
+  background: #ee7d7a;
+  border-color: #ee7d7a;
+}
+.small {
+  font-size: 12px;
+}
+.warn-text {
+  color: #ffb3b0;
+}
+
+.tray {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 100%;
+}
+.tray h3 {
+  margin: 0;
+  font-size: 14px;
+}
+.tray h4 {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.tray .current-path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  direction: rtl;
+  text-align: left;
+  color: var(--muted);
+}
+.tray-notes {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  background: rgba(242, 164, 58, 0.08);
+  border: 1px solid rgba(242, 164, 58, 0.3);
+  border-radius: 6px;
+  color: #f5c98a;
+  font-size: 12px;
+}
+.tray-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+.tray-items li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(39, 45, 58, 0.6);
+}
+.tray-item-text {
+  flex: 1;
+  min-width: 0;
+}
+.tray-item-text .name,
+.tray-item-text .path {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.tray-item-text .path {
+  font-size: 11px;
+}
+.tray-items .size {
+  font-variant-numeric: tabular-nums;
+}
+.tray-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  padding: 10px 0 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.tray-total .link {
+  margin-left: 8px;
+}
+.tray-badge {
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  vertical-align: middle;
+}
+.option.small {
+  margin-top: 0;
+  font-size: 12px;
+}
+.report-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.report-items li {
+  display: flex;
+  gap: 8px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(39, 45, 58, 0.6);
+  overflow-wrap: anywhere;
+}
+.status {
+  flex: none;
+  font-size: 10px;
+  text-transform: uppercase;
+  padding: 1px 6px;
+  border-radius: 8px;
+  height: fit-content;
+  background: rgba(255, 255, 255, 0.08);
+}
+.status.failed,
+.status.partial {
+  color: var(--danger);
+}
+.status.skipped {
+  color: var(--warn);
+}
+.context-menu hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 4px 0;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: grid;
+  place-items: center;
+  z-index: 70;
+}
+.modal {
+  width: min(480px, calc(100vw - 32px));
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 18px 20px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+.modal h3 {
+  margin: 0 0 8px;
+}
+.modal p {
+  margin: 8px 0;
+}
+.confirm-input {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 12px 0;
+}
+.confirm-input input {
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 14px;
+}

@@ -8,20 +8,26 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use hoard_core::classify::category_for;
+use hoard_core::cleanup::{
+    required_confirmation, run_cleanup, CleanupContext, CleanupMode, SystemRemover, Tray,
+};
 use hoard_core::view::{self, TreemapOptions, MAX_VIEW_ITEMS};
-use hoard_core::{LargestKind, NodeId, ScanEvent, ScanOptions, SizeMode, SortKey};
+use hoard_core::{LargestKind, NodeId, ScanEvent, ScanOptions, SizeMode, SortKey, Tree};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dto::{
-    BatchDto, BatchEntryDto, ChildrenPageDto, CrumbDto, DiskDto, DoneDto, ErrorDto, ErrorsPageDto,
-    LargestItemDto, NodeDetailDto, NodeDto, ProgressDto, ScanOptsDto, SummaryDto, TreemapDto,
+    BatchDto, BatchEntryDto, ChildrenPageDto, CleanupProgressDto, CleanupReportDto, CrumbDto,
+    DiskDto, DoneDto, ErrorDto, ErrorsPageDto, LargestItemDto, NodeDetailDto, NodeDto, ProgressDto,
+    ScanOptsDto, SummaryDto, TrayDto, TreemapDto,
 };
-use crate::state::{AppState, ScanResult};
+use crate::state::{describe_add, AppState};
 
 /// Upper bound for `get_largest`.
 const MAX_LARGEST: usize = 1_000;
 
 type CmdResult<T> = Result<T, String>;
+
+// ------------------------------------------------------------------ disks, scan
 
 #[tauri::command]
 pub async fn list_disks() -> CmdResult<Vec<DiskDto>> {
@@ -40,7 +46,8 @@ pub async fn home_dir(app: AppHandle) -> CmdResult<String> {
 }
 
 /// Starts a scan on a background thread and returns its id. Any running scan
-/// is cancelled. Emits `scan://progress`, `scan://batch` and `scan://done`.
+/// is cancelled. Refused while a cleanup runs. Emits `scan://progress`,
+/// `scan://batch` and `scan://done`.
 #[tauri::command]
 pub async fn start_scan(
     app: AppHandle,
@@ -92,14 +99,7 @@ fn run_scan(
     let done = match outcome {
         Ok(Ok(tree)) => {
             let summary = SummaryDto::new(&tree, elapsed_ms);
-            let stored = state.finish_scan(
-                scan_id,
-                Some(ScanResult {
-                    tree: Arc::new(tree),
-                    elapsed_ms,
-                }),
-            );
-            if !stored {
+            if !state.finish_scan(scan_id, Some(tree), elapsed_ms) {
                 // Superseded by a newer scan; its own done event will follow.
                 return;
             }
@@ -110,7 +110,7 @@ fn run_scan(
             }
         }
         Ok(Err(e)) => {
-            state.finish_scan(scan_id, None);
+            state.finish_scan(scan_id, None, elapsed_ms);
             DoneDto {
                 scan_id,
                 summary: None,
@@ -119,7 +119,7 @@ fn run_scan(
         }
         Err(_) => {
             tracing::error!(scan_id, "scan thread panicked");
-            state.finish_scan(scan_id, None);
+            state.finish_scan(scan_id, None, elapsed_ms);
             DoneDto {
                 scan_id,
                 summary: None,
@@ -182,24 +182,27 @@ pub async fn cancel_scan(state: State<'_, AppState>, scan_id: u64) -> CmdResult<
     state.cancel_scan(scan_id)
 }
 
+// ------------------------------------------------------------------ queries
+
 #[tauri::command]
 pub async fn get_summary(state: State<'_, AppState>) -> CmdResult<SummaryDto> {
     let r = state.result()?;
-    Ok(SummaryDto::new(&r.tree, r.elapsed_ms))
+    let tree = r.read()?;
+    Ok(SummaryDto::new(&tree, r.elapsed_ms))
 }
 
 #[tauri::command]
 pub async fn get_node(state: State<'_, AppState>, id: u32) -> CmdResult<NodeDetailDto> {
     let r = state.result()?;
-    let tree = &r.tree;
+    let tree = r.read()?;
     let nid = NodeId(id);
-    let node = NodeDto::new(tree, nid).ok_or("unknown node")?;
+    let node = NodeDto::new(&tree, nid).ok_or("unknown node")?;
     let path = tree
         .path(nid)
         .ok_or("unknown node")?
         .to_string_lossy()
         .into_owned();
-    let ancestors = view::ancestors(tree, nid)
+    let ancestors = view::ancestors(&tree, nid)
         .into_iter()
         .filter_map(|a| {
             tree.get(a).map(|n| CrumbDto {
@@ -225,14 +228,15 @@ pub async fn get_children(
     limit: usize,
 ) -> CmdResult<ChildrenPageDto> {
     let r = state.result()?;
-    let page = view::children_page(&r.tree, NodeId(id), sort, mode, offset, limit);
+    let tree = r.read()?;
+    let page = view::children_page(&tree, NodeId(id), sort, mode, offset, limit);
     Ok(ChildrenPageDto {
         total: page.total,
         offset,
         items: page
             .items
             .into_iter()
-            .filter_map(|c| NodeDto::new(&r.tree, c))
+            .filter_map(|c| NodeDto::new(&tree, c))
             .collect(),
     })
 }
@@ -247,13 +251,14 @@ pub async fn get_treemap(
     max_nodes: Option<usize>,
 ) -> CmdResult<TreemapDto> {
     let r = state.result()?;
+    let tree = r.read()?;
     let opts = TreemapOptions {
         depth: depth.min(8),
         min_bytes,
         max_nodes: max_nodes.unwrap_or(4_000).min(MAX_VIEW_ITEMS),
         mode,
     };
-    view::treemap(&r.tree, NodeId(id), opts)
+    view::treemap(&tree, NodeId(id), opts)
         .map(TreemapDto::from)
         .ok_or_else(|| "unknown node".to_string())
 }
@@ -266,13 +271,13 @@ pub async fn get_largest(
     mode: SizeMode,
 ) -> CmdResult<Vec<LargestItemDto>> {
     let r = state.result()?;
-    let tree = &r.tree;
+    let tree = r.read()?;
     Ok(tree
         .largest(kind, limit.min(MAX_LARGEST), mode)
         .into_iter()
         .filter_map(|id| {
             Some(LargestItemDto {
-                node: NodeDto::new(tree, id)?,
+                node: NodeDto::new(&tree, id)?,
                 path: tree.path(id)?.to_string_lossy().into_owned(),
             })
         })
@@ -286,7 +291,8 @@ pub async fn get_errors(
     limit: usize,
 ) -> CmdResult<ErrorsPageDto> {
     let r = state.result()?;
-    let errors = r.tree.errors();
+    let tree = r.read()?;
+    let errors = tree.errors();
     Ok(ErrorsPageDto {
         total: errors.len(),
         items: errors
@@ -315,7 +321,166 @@ pub async fn open_node(state: State<'_, AppState>, id: u32) -> CmdResult<()> {
 
 fn node_path(state: &State<'_, AppState>, id: u32) -> CmdResult<PathBuf> {
     let r = state.result()?;
-    r.tree
-        .path(NodeId(id))
+    let tree = r.read()?;
+    tree.path(NodeId(id))
         .ok_or_else(|| "unknown node".to_string())
+}
+
+// ------------------------------------------------------------------ tray
+
+fn cleanup_context(app: &AppHandle, tree: &Tree) -> CleanupContext {
+    CleanupContext::for_current_user(tree.root_path().to_path_buf(), action_log_path(app))
+}
+
+/// `<app data dir>/actions.jsonl`, falling back to the OS data dir.
+/// Debug builds honour `HOARD_ACTION_LOG` so automated runs never write to
+/// the real log.
+fn action_log_path(app: &AppHandle) -> PathBuf {
+    #[cfg(debug_assertions)]
+    if let Some(p) = std::env::var_os("HOARD_ACTION_LOG") {
+        return PathBuf::from(p);
+    }
+    app.path()
+        .app_data_dir()
+        .map(|d| d.join("actions.jsonl"))
+        .ok()
+        .or_else(CleanupContext::default_log_path)
+        .unwrap_or_else(|| PathBuf::from("hoard-actions.jsonl"))
+}
+
+/// Adds nodes to the tray. Returns the whole tray (versioned) plus notes on
+/// anything covered, replaced or rejected.
+#[tauri::command]
+pub async fn tray_add(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<u32>,
+) -> CmdResult<TrayDto> {
+    let ids: Vec<NodeId> = ids.into_iter().map(NodeId).collect();
+    state.with_tray(
+        |tray, tree, ctx| {
+            let out = tray.add(tree, &ids, ctx);
+            tray_dto(tray, tree, ctx, describe_add(&out, tree))
+        },
+        |tree| cleanup_context(&app, tree),
+    )
+}
+
+#[tauri::command]
+pub async fn tray_remove(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ids: Vec<u32>,
+) -> CmdResult<TrayDto> {
+    let ids: Vec<NodeId> = ids.into_iter().map(NodeId).collect();
+    state.with_tray(
+        |tray, tree, ctx| {
+            tray.remove(&ids);
+            tray_dto(tray, tree, ctx, Vec::new())
+        },
+        |tree| cleanup_context(&app, tree),
+    )
+}
+
+#[tauri::command]
+pub async fn tray_clear(app: AppHandle, state: State<'_, AppState>) -> CmdResult<TrayDto> {
+    state.with_tray(
+        |tray, tree, ctx| {
+            tray.clear();
+            tray_dto(tray, tree, ctx, Vec::new())
+        },
+        |tree| cleanup_context(&app, tree),
+    )
+}
+
+#[tauri::command]
+pub async fn tray_list(app: AppHandle, state: State<'_, AppState>) -> CmdResult<TrayDto> {
+    let (tray, result) = state.tray()?;
+    match result {
+        Some(r) => {
+            let tree = r.read()?;
+            let ctx = cleanup_context(&app, &tree);
+            Ok(tray_dto(&tray, &tree, &ctx, Vec::new()))
+        }
+        None => Ok(TrayDto::empty(&tray)),
+    }
+}
+
+fn tray_dto(tray: &Tray, tree: &Tree, ctx: &CleanupContext, notes: Vec<String>) -> TrayDto {
+    let confirmation = required_confirmation(tree, tray.items(), CleanupMode::Permanent, ctx);
+    TrayDto::new(tray, tree, notes, confirmation)
+}
+
+// ------------------------------------------------------------------ cleanup
+
+/// Runs the tray through the safety pipeline and returns the full report.
+///
+/// The caller supplies `run_id` before calling, so every
+/// `cleanup://progress` event carries an id the UI already knows; the
+/// result arrives as this command's return value, not as an event.
+#[tauri::command]
+pub async fn execute_cleanup(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    run_id: String,
+    mode: CleanupMode,
+    confirmation: Option<String>,
+) -> CmdResult<CleanupReportDto> {
+    let start = state.begin_cleanup(&run_id)?;
+    let ctx = {
+        let tree = start.result.read();
+        match tree {
+            Ok(t) => cleanup_context(&app, &t),
+            Err(e) => {
+                state.finish_cleanup(&run_id);
+                return Err(e);
+            }
+        }
+    };
+    let worker_app = app.clone();
+    let worker_run_id = run_id.clone();
+    let joined = tauri::async_runtime::spawn_blocking(move || {
+        let mut on_progress = |p: hoard_core::cleanup::CleanupProgress| {
+            let _ = worker_app.emit(
+                "cleanup://progress",
+                CleanupProgressDto {
+                    run_id: worker_run_id.clone(),
+                    done: p.done,
+                    total: p.total,
+                    current_path: p.current.to_string_lossy().into_owned(),
+                },
+            );
+        };
+        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            run_cleanup(
+                &start.result.tree,
+                &start.items,
+                mode,
+                confirmation.as_deref(),
+                &ctx,
+                &SystemRemover,
+                &worker_run_id,
+                &start.cancel,
+                &mut on_progress,
+            )
+        }))
+    })
+    .await;
+    // Always leave the busy state, whatever happened.
+    state.finish_cleanup(&run_id);
+    let _ = app.emit("cleanup://done", run_id.clone());
+
+    match joined {
+        Ok(Ok(Ok(report))) => Ok(CleanupReportDto::from(&report)),
+        Ok(Ok(Err(e))) => Err(e.to_string()),
+        Ok(Err(_)) | Err(_) => {
+            tracing::error!(run_id, "cleanup worker panicked");
+            Err("internal error during cleanup; see the action log for what was done".into())
+        }
+    }
+}
+
+#[tauri::command]
+pub async fn cancel_cleanup(state: State<'_, AppState>, run_id: String) -> CmdResult<bool> {
+    state.cancel_cleanup(&run_id)
 }

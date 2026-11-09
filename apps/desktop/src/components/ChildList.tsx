@@ -29,6 +29,8 @@ export function ChildList() {
   const setSort = useHoard((s) => s.setSort);
   const loadMore = useHoard((s) => s.loadMoreChildren);
   const openContextMenu = useHoard((s) => s.openContextMenu);
+  const trayItems = useHoard((s) => s.tray?.items);
+  const trayIds = new Set(trayItems?.map((i) => i.node.id));
   const selectedRef = useRef<HTMLTableRowElement>(null);
 
   useEffect(() => {
@@ -82,6 +84,7 @@ export function ChildList() {
                     {n.name}
                     {n.kind === "dir" ? "/" : ""}
                   </span>
+                  {trayIds.has(n.id) && <span className="tray-badge">in tray</span>}
                   {n.flags.length > 0 && <span className="flag">{n.flags.join(", ").replace("_", " ")}</span>}
                 </td>
                 <td className="col-size">

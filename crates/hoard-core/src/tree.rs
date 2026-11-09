@@ -60,18 +60,31 @@ impl NodeFlags {
     pub const OTHER_FS: NodeFlags = NodeFlags(1 << 3);
     /// Directory excluded by [`crate::scan::ScanOptions::skip`]; not descended into.
     pub const SKIPPED: NodeFlags = NodeFlags(1 << 4);
+    /// Deleted by a cleanup run. Detached from its parent; kept in the arena
+    /// so ids stay stable, but skipped by every query.
+    pub const REMOVED: NodeFlags = NodeFlags(1 << 5);
+    /// Contents changed on disk after the scan (e.g. a partially failed
+    /// permanent delete). Sizes are no longer exact; rescan to refresh.
+    pub const STALE: NodeFlags = NodeFlags(1 << 6);
 
-    const NAMES: [(NodeFlags, &'static str); 5] = [
+    const NAMES: [(NodeFlags, &'static str); 7] = [
         (Self::ERROR, "error"),
         (Self::HARDLINK_DUP, "hardlink_dup"),
         (Self::PROTECTED, "protected"),
         (Self::OTHER_FS, "other_fs"),
         (Self::SKIPPED, "skipped"),
+        (Self::REMOVED, "removed"),
+        (Self::STALE, "stale"),
     ];
 
     /// True if every bit in `other` is set.
     pub fn contains(self, other: NodeFlags) -> bool {
         self.0 & other.0 == other.0
+    }
+
+    /// True if any bit in `other` is set.
+    pub fn intersects(self, other: NodeFlags) -> bool {
+        self.0 & other.0 != 0
     }
 
     /// Sets the bits in `other`.
@@ -253,7 +266,10 @@ impl Tree {
 
     /// Number of directories, including the root.
     pub fn dir_count(&self) -> usize {
-        self.nodes.iter().filter(|n| n.is_dir()).count()
+        self.nodes
+            .iter()
+            .filter(|n| n.is_dir() && !n.flags.contains(NodeFlags::REMOVED))
+            .count()
     }
 
     /// Rebuilds the full path of a node by walking its parents.
@@ -292,6 +308,9 @@ impl Tree {
         }
         let mut heap: BinaryHeap<Reverse<(u64, NodeId)>> = BinaryHeap::with_capacity(limit + 1);
         for (i, node) in self.nodes.iter().enumerate() {
+            if node.flags.contains(NodeFlags::REMOVED) {
+                continue;
+            }
             let wanted = match kind {
                 LargestKind::Files => !node.is_dir(),
                 LargestKind::Dirs => node.is_dir() && node.parent.is_some(),
@@ -309,6 +328,81 @@ impl Tree {
         let mut out: Vec<(u64, NodeId)> = heap.into_iter().map(|Reverse(x)| x).collect();
         out.sort_by(|a, b| b.cmp(a));
         out.into_iter().map(|(_, id)| id).collect()
+    }
+}
+
+impl Tree {
+    /// True if any bit of `flags` is set on `id` or any node below it.
+    pub fn subtree_has_flag(&self, id: NodeId, flags: NodeFlags) -> bool {
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            let Some(n) = self.get(cur) else { continue };
+            if n.flags.intersects(flags) {
+                return true;
+            }
+            stack.extend_from_slice(&n.children);
+        }
+        false
+    }
+
+    /// True if `ancestor` is `id` or one of its ancestors.
+    pub fn is_ancestor_or_self(&self, ancestor: NodeId, id: NodeId) -> bool {
+        let mut cur = Some(id);
+        while let Some(c) = cur {
+            if c == ancestor {
+                return true;
+            }
+            cur = self.get(c).and_then(|n| n.parent);
+        }
+        false
+    }
+
+    /// Adds flags to a node. Returns false for an unknown id.
+    pub fn set_flag(&mut self, id: NodeId, flag: NodeFlags) -> bool {
+        match self.nodes.get_mut(id.index()) {
+            Some(n) => {
+                n.flags.insert(flag);
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Removes a node and everything below it after a successful deletion:
+    /// detaches it from its parent, subtracts its sizes and file count from
+    /// every ancestor, and marks the whole subtree [`NodeFlags::REMOVED`].
+    ///
+    /// Returns the removed `(allocated, apparent, files)`, or `None` for the
+    /// root, an unknown id or an already removed node.
+    pub fn remove_subtree(&mut self, id: NodeId) -> Option<(u64, u64, u32)> {
+        let node = self.get(id)?;
+        let parent = node.parent?;
+        if node.flags.contains(NodeFlags::REMOVED) {
+            return None;
+        }
+        let removed = (node.size_allocated, node.size_apparent, node.file_count);
+
+        let mut stack = vec![id];
+        while let Some(cur) = stack.pop() {
+            if let Some(n) = self.nodes.get_mut(cur.index()) {
+                n.flags.insert(NodeFlags::REMOVED);
+                stack.extend_from_slice(&n.children);
+            }
+        }
+        if let Some(p) = self.nodes.get_mut(parent.index()) {
+            p.children.retain(|c| *c != id);
+        }
+        let mut cur = Some(parent);
+        while let Some(c) = cur {
+            let Some(n) = self.nodes.get_mut(c.index()) else {
+                break;
+            };
+            n.size_allocated = n.size_allocated.saturating_sub(removed.0);
+            n.size_apparent = n.size_apparent.saturating_sub(removed.1);
+            n.file_count = n.file_count.saturating_sub(removed.2);
+            cur = n.parent;
+        }
+        Some(removed)
     }
 }
 
@@ -562,6 +656,43 @@ mod tests {
         assert!(t
             .largest(LargestKind::Files, 0, SizeMode::Allocated)
             .is_empty());
+    }
+
+    #[test]
+    fn remove_subtree_updates_ancestors_and_queries() {
+        let mut t = sample();
+        // Remove "a" (contains big + small).
+        let removed = t.remove_subtree(NodeId(1)).unwrap();
+        assert_eq!(removed, (4096 + 8192 + 4096, 8010, 2));
+        let root = t.get(t.root()).unwrap();
+        assert_eq!(root.size_allocated, 4096);
+        assert_eq!(root.size_apparent, 0);
+        assert_eq!(root.file_count, 1);
+        assert_eq!(t.children(t.root()), &[NodeId(4)]);
+        assert!(t.get(NodeId(2)).unwrap().flags.contains(NodeFlags::REMOVED));
+        assert_eq!(
+            t.largest(LargestKind::Files, 10, SizeMode::Allocated),
+            vec![NodeId(4)]
+        );
+        assert_eq!(t.dir_count(), 1);
+        // Idempotent, and the root can never be removed.
+        assert!(t.remove_subtree(NodeId(1)).is_none());
+        assert!(t.remove_subtree(t.root()).is_none());
+        assert!(t.remove_subtree(NodeId(999)).is_none());
+    }
+
+    #[test]
+    fn subtree_flag_and_ancestry() {
+        let mut t = sample();
+        assert!(!t.subtree_has_flag(NodeId(1), NodeFlags::ERROR));
+        t.set_flag(NodeId(3), NodeFlags::ERROR);
+        assert!(t.subtree_has_flag(NodeId(1), NodeFlags::ERROR));
+        assert!(t.subtree_has_flag(t.root(), NodeFlags::ERROR));
+        assert!(!t.subtree_has_flag(NodeId(4), NodeFlags::ERROR));
+        assert!(t.is_ancestor_or_self(NodeId(1), NodeId(3)));
+        assert!(t.is_ancestor_or_self(NodeId(3), NodeId(3)));
+        assert!(!t.is_ancestor_or_self(NodeId(3), NodeId(1)));
+        assert!(!t.is_ancestor_or_self(NodeId(4), NodeId(2)));
     }
 
     #[test]

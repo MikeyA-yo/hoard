@@ -2,10 +2,160 @@
 //! never sees `Tree` or `Node` directly.
 
 use hoard_core::classify::{category_for, Category};
+use hoard_core::cleanup::{CleanupMode, CleanupReport, Tray};
 use hoard_core::disks::DiskInfo;
-use hoard_core::view::TreemapNode;
+use hoard_core::view::{TreemapNode, MAX_VIEW_ITEMS};
 use hoard_core::{NodeId, NodeKind, ScanError, ScanErrorKind, SizeMode, Tree};
 use serde::{Deserialize, Serialize};
+
+// ------------------------------------------------------------------ tray
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayItemDto {
+    pub node: NodeDto,
+    pub path: String,
+}
+
+/// The whole tray. `version` increases on every change and `generation`
+/// identifies the scan; the UI applies a response only if it is newer.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TrayDto {
+    pub generation: u64,
+    pub version: u64,
+    pub count: usize,
+    pub items: Vec<TrayItemDto>,
+    pub total_allocated: u64,
+    pub total_apparent: u64,
+    pub file_count: u64,
+    /// Text the user must type to run a permanent delete of this tray, if any.
+    pub permanent_confirmation: Option<String>,
+    /// Notes about the last change (covered, replaced, rejected items).
+    pub notes: Vec<String>,
+}
+
+impl TrayDto {
+    pub fn new(
+        tray: &Tray,
+        tree: &Tree,
+        notes: Vec<String>,
+        permanent_confirmation: Option<String>,
+    ) -> Self {
+        let items: Vec<TrayItemDto> = tray
+            .items()
+            .iter()
+            .take(MAX_VIEW_ITEMS)
+            .filter_map(|&id| {
+                Some(TrayItemDto {
+                    node: NodeDto::new(tree, id)?,
+                    path: tree.path(id)?.to_string_lossy().into_owned(),
+                })
+            })
+            .collect();
+        TrayDto {
+            generation: tray.generation(),
+            version: tray.version(),
+            count: tray.items().len(),
+            items,
+            total_allocated: tray.total(tree, SizeMode::Allocated),
+            total_apparent: tray.total(tree, SizeMode::Apparent),
+            file_count: tray.file_count(tree),
+            permanent_confirmation,
+            notes,
+        }
+    }
+
+    pub fn empty(tray: &Tray) -> Self {
+        TrayDto {
+            generation: tray.generation(),
+            version: tray.version(),
+            count: 0,
+            items: Vec::new(),
+            total_allocated: 0,
+            total_apparent: 0,
+            file_count: 0,
+            permanent_confirmation: None,
+            notes: Vec::new(),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ cleanup
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupProgressDto {
+    pub run_id: String,
+    pub done: usize,
+    pub total: usize,
+    pub current_path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupItemDto {
+    pub path: String,
+    pub kind: NodeKind,
+    pub size_allocated: u64,
+    pub size_apparent: u64,
+    /// removed | skipped | failed | partial
+    pub status: &'static str,
+    pub reason: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CleanupReportDto {
+    pub run_id: String,
+    pub mode: CleanupMode,
+    pub removed: usize,
+    pub skipped: usize,
+    pub failed: usize,
+    pub partial: usize,
+    pub estimated_freed: u64,
+    pub estimated_freed_apparent: u64,
+    /// Free-space change of the volume (after minus before), if measurable.
+    pub measured_freed: Option<i64>,
+    pub cancelled: bool,
+    /// Items that were not removed come first, then removed ones.
+    pub items: Vec<CleanupItemDto>,
+    pub total_items: usize,
+}
+
+impl From<&CleanupReport> for CleanupReportDto {
+    fn from(r: &CleanupReport) -> Self {
+        let mut items: Vec<CleanupItemDto> = r
+            .results
+            .iter()
+            .map(|i| CleanupItemDto {
+                path: i.path.to_string_lossy().into_owned(),
+                kind: i.kind,
+                size_allocated: i.size_allocated,
+                size_apparent: i.size_apparent,
+                status: i.outcome.status(),
+                reason: i.outcome.reason(),
+            })
+            .collect();
+        items.sort_by_key(|i| i.status == "removed");
+        let total_items = items.len();
+        items.truncate(MAX_VIEW_ITEMS);
+        CleanupReportDto {
+            run_id: r.run_id.clone(),
+            mode: r.mode,
+            removed: r.count("removed"),
+            skipped: r.count("skipped"),
+            failed: r.count("failed"),
+            partial: r.count("partial"),
+            estimated_freed: r.estimated_freed,
+            estimated_freed_apparent: r.estimated_freed_apparent,
+            measured_freed: r.measured_freed(),
+            cancelled: r.cancelled,
+            items,
+            total_items,
+        }
+    }
+}
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]

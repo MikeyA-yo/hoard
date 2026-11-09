@@ -27,6 +27,12 @@ pub fn run() {
             commands::get_errors,
             commands::reveal_node,
             commands::open_node,
+            commands::tray_add,
+            commands::tray_remove,
+            commands::tray_clear,
+            commands::tray_list,
+            commands::execute_cleanup,
+            commands::cancel_cleanup,
         ])
         .run(tauri::generate_context!());
     if let Err(e) = result {

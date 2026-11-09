@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { onScanEvents } from "./api";
+import { onCleanupProgress, onScanEvents } from "./api";
 import { useHoard } from "./store";
 import { HomeScreen } from "./components/HomeScreen";
 import { ScanningScreen } from "./components/ScanningScreen";
@@ -12,15 +12,17 @@ export function App() {
 
   useEffect(() => {
     const s = useHoard.getState();
-    let unlisten: (() => void) | undefined;
+    const offs: (() => void)[] = [];
     let disposed = false;
-    void onScanEvents({ progress: s.onProgress, batch: s.onBatch, done: s.onDone }).then((off) => {
+    const keep = (off: () => void) => {
       if (disposed) off();
-      else unlisten = off;
-    });
+      else offs.push(off);
+    };
+    void onScanEvents({ progress: s.onProgress, batch: s.onBatch, done: s.onDone }).then(keep);
+    void onCleanupProgress(s.onCleanupProgress).then(keep);
     return () => {
       disposed = true;
-      unlisten?.();
+      offs.forEach((off) => off());
     };
   }, []);
 

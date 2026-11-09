@@ -10,7 +10,7 @@ how the code is organised.
 |-----------|-------|
 | M0 Core + CLI | Done |
 | M1 Desktop viewer | Done (Windows verified; macOS/Linux untested) |
-| M2 Cleanup | Not started |
+| M2 Cleanup | Done (Windows verified; real Recycle Bin test is manual) |
 | M3 Lenses + suggestions | Not started |
 | M4 Apps, duplicates, history | Not started |
 | M5 Platform depth | Not started |
@@ -54,6 +54,25 @@ Open / Copy path from the right-click menu.
 IPC commands beyond the CLAUDE.md table: `home_dir`, `get_summary`,
 `get_errors`, `reveal_node`, `open_node` (both take a node id, never a path),
 and an explicit `mode` (allocated or apparent) on the query commands.
+
+## Cleanup (M2)
+
+Nothing is deleted except from the Cleanup Tray (right-click, or Space on a
+selected item). The default is Move to Recycle Bin / Trash; permanent delete
+must be enabled per run and asks for the typed total above 10 GB or 1,000
+files. Every item is re-checked just before removal: it must still be the
+same file or folder as when scanned (device + inode), not on the protected
+list, not the scanned folder or one of its parents, and still inside the
+scanned folder. Links are removed as links. Anything that fails a check is
+skipped and reported, never retried another way. Each item gets a line in
+`actions.jsonl` in the app data folder, and the report shows estimated and
+measured freed space (Recycle Bin moves free space only when it is emptied).
+
+The real Recycle Bin test is manual:
+
+```bash
+cargo test -p hoard-core --test cleanup -- --ignored real_trash
+```
 
 ## Development
 

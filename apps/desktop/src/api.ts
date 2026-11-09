@@ -5,6 +5,10 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import type {
   Batch,
+  CleanupMode,
+  CleanupProgress,
+  CleanupReport,
+  Tray,
   ChildrenPage,
   Disk,
   Done,
@@ -36,7 +40,21 @@ export const api = {
   getErrors: (offset: number, limit: number) => invoke<ErrorsPage>("get_errors", { offset, limit }),
   revealNode: (id: number) => invoke<null>("reveal_node", { id }),
   openNode: (id: number) => invoke<null>("open_node", { id }),
+
+  trayAdd: (ids: number[]) => invoke<Tray>("tray_add", { ids }),
+  trayRemove: (ids: number[]) => invoke<Tray>("tray_remove", { ids }),
+  trayClear: () => invoke<Tray>("tray_clear"),
+  trayList: () => invoke<Tray>("tray_list"),
+  /** Resolves with the full report; `runId` is chosen by the caller up front. */
+  executeCleanup: (runId: string, mode: CleanupMode, confirmation: string | null) =>
+    invoke<CleanupReport>("execute_cleanup", { runId, mode, confirmation }),
+  cancelCleanup: (runId: string) => invoke<boolean>("cancel_cleanup", { runId }),
 };
+
+/** Subscribes to cleanup progress events. */
+export function onCleanupProgress(handler: (p: CleanupProgress) => void): Promise<UnlistenFn> {
+  return listen<CleanupProgress>("cleanup://progress", (e) => handler(e.payload));
+}
 
 /** Opens the native folder picker. Resolves to null if cancelled. */
 export async function pickFolder(): Promise<string | null> {

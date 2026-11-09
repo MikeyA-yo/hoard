@@ -141,3 +141,56 @@ export interface ErrorsPage {
 export function sizeOf(n: { sizeAllocated: number; sizeApparent: number }, mode: SizeMode): number {
   return mode === "allocated" ? n.sizeAllocated : n.sizeApparent;
 }
+
+// ------------------------------------------------------------------ cleanup
+
+export type CleanupMode = "trash" | "permanent";
+
+export interface TrayItem {
+  node: NodeInfo;
+  path: string;
+}
+
+export interface Tray {
+  generation: number;
+  version: number;
+  count: number;
+  items: TrayItem[];
+  totalAllocated: number;
+  totalApparent: number;
+  fileCount: number;
+  /** Text to type before a permanent delete of this tray, if required. */
+  permanentConfirmation: string | null;
+  notes: string[];
+}
+
+export interface CleanupProgress {
+  runId: string;
+  done: number;
+  total: number;
+  currentPath: string;
+}
+
+export interface CleanupItem {
+  path: string;
+  kind: NodeKind;
+  sizeAllocated: number;
+  sizeApparent: number;
+  status: "removed" | "skipped" | "failed" | "partial";
+  reason: string | null;
+}
+
+export interface CleanupReport {
+  runId: string;
+  mode: CleanupMode;
+  removed: number;
+  skipped: number;
+  failed: number;
+  partial: number;
+  estimatedFreed: number;
+  estimatedFreedApparent: number;
+  measuredFreed: number | null;
+  cancelled: boolean;
+  items: CleanupItem[];
+  totalItems: number;
+}

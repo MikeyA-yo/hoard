@@ -16,6 +16,7 @@
 #![warn(missing_docs)]
 
 pub mod classify;
+pub mod cleanup;
 pub mod disks;
 pub mod error;
 pub mod format;
