@@ -194,3 +194,36 @@ export interface CleanupReport {
   items: CleanupItem[];
   totalItems: number;
 }
+
+// ------------------------------------------------------------------ suggestions
+
+export type Safety = "safe" | "review" | "caution";
+export type RuleGroupKind = "dev" | "packages" | "caches" | "downloads" | "temp" | "system";
+
+export interface SuggestionItem {
+  node: NodeInfo;
+  path: string;
+  newestMtime: number;
+}
+
+export interface SuggestionGroup {
+  ruleId: string;
+  name: string;
+  safety: Safety;
+  group: RuleGroupKind;
+  explain: string;
+  regenerate: string | null;
+  addable: boolean;
+  totalAllocated: number;
+  totalApparent: number;
+  count: number;
+  items: SuggestionItem[];
+}
+
+export interface Suggestions {
+  groups: SuggestionGroup[];
+  safeTotal: number;
+  safeCount: number;
+  reviewTotal: number;
+  cautionTotal: number;
+}

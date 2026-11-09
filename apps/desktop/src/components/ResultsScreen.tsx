@@ -6,6 +6,7 @@ import { TreemapView } from "./TreemapView";
 import { ChildList } from "./ChildList";
 import { ErrorsPanel, LargestPanel } from "./SidePanels";
 import { TrayPanel } from "./TrayPanel";
+import { SuggestionsView } from "./SuggestionsView";
 
 const TABS: { key: SideTab; label: string }[] = [
   { key: "contents", label: "Contents" },
@@ -35,6 +36,8 @@ export function ResultsScreen() {
   const scanOpts = useHoard((s) => s.scanOpts);
   const trayCount = useHoard((s) => s.tray?.count ?? 0);
   const cleaning = useHoard((s) => s.cleanup?.status === "running");
+  const mainView = useHoard((s) => s.mainView);
+  const setMainView = useHoard((s) => s.setMainView);
 
   // Keyboard: arrows move selection, Enter drills in, Backspace goes up.
   useEffect(() => {
@@ -105,6 +108,14 @@ export function ResultsScreen() {
             {!summary.complete && <span className="badge">Incomplete: scan was stopped</span>}
           </div>
         </div>
+        <div className="segmented" role="group" aria-label="View">
+          <button className={mainView === "map" ? "on" : ""} onClick={() => setMainView("map")}>
+            Map
+          </button>
+          <button className={mainView === "suggestions" ? "on" : ""} onClick={() => setMainView("suggestions")}>
+            Suggestions
+          </button>
+        </div>
         <div className="segmented" role="group" aria-label="Size mode">
           <button className={mode === "allocated" ? "on" : ""} onClick={() => setMode("allocated")} title="Space actually used on disk">
             On disk
@@ -149,7 +160,7 @@ export function ResultsScreen() {
       </nav>
 
       <main className="workspace">
-        <TreemapView />
+        {mainView === "map" ? <TreemapView /> : <SuggestionsView />}
         <aside className="side">
           <div className="tabs" role="tablist">
             {TABS.map((t) => (

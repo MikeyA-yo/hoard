@@ -341,6 +341,9 @@ pub(crate) fn static_checks(
     if let Some(why) = protected::check(&path, ctx) {
         return Err(SkipReason::Protected { why });
     }
+    if let Some(why) = protected::check_tree(tree, id) {
+        return Err(SkipReason::Protected { why });
+    }
     if node.is_dir()
         && tree.subtree_has_flag(
             id,

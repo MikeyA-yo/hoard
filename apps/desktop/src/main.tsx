@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./styles.css";
 import "./tray.css";
+import "./suggestions.css";
 import { useHoard } from "./store";
 
 // Dev-only hook for driving the UI from automation (CDP). Stripped from

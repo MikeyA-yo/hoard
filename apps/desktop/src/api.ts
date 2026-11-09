@@ -8,6 +8,7 @@ import type {
   CleanupMode,
   CleanupProgress,
   CleanupReport,
+  Suggestions,
   Tray,
   ChildrenPage,
   Disk,
@@ -49,6 +50,10 @@ export const api = {
   executeCleanup: (runId: string, mode: CleanupMode, confirmation: string | null) =>
     invoke<CleanupReport>("execute_cleanup", { runId, mode, confirmation }),
   cancelCleanup: (runId: string) => invoke<boolean>("cancel_cleanup", { runId }),
+
+  getSuggestions: () => invoke<Suggestions>("get_suggestions"),
+  /** `ruleId` null adds every Safe item; only Safe rules can be bulk-added. */
+  addSuggestionsToTray: (ruleId: string | null) => invoke<Tray>("add_suggestions_to_tray", { ruleId }),
 };
 
 /** Subscribes to cleanup progress events. */

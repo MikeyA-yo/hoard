@@ -11,10 +11,13 @@ use hoard_core::classify::category_for;
 use hoard_core::cleanup::{
     required_confirmation, run_cleanup, CleanupContext, CleanupMode, SystemRemover, Tray,
 };
+use hoard_core::rules::{suggest, MatchContext, RuleSet, Safety};
 use hoard_core::view::{self, TreemapOptions, MAX_VIEW_ITEMS};
 use hoard_core::{LargestKind, NodeId, ScanEvent, ScanOptions, SizeMode, SortKey, Tree};
+use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 
+use crate::dto::SuggestionsDto;
 use crate::dto::{
     BatchDto, BatchEntryDto, ChildrenPageDto, CleanupProgressDto, CleanupReportDto, CrumbDto,
     DiskDto, DoneDto, ErrorDto, ErrorsPageDto, LargestItemDto, NodeDetailDto, NodeDto, ProgressDto,
@@ -409,6 +412,60 @@ pub async fn tray_list(app: AppHandle, state: State<'_, AppState>) -> CmdResult<
 fn tray_dto(tray: &Tray, tree: &Tree, ctx: &CleanupContext, notes: Vec<String>) -> TrayDto {
     let confirmation = required_confirmation(tree, tray.items(), CleanupMode::Permanent, ctx);
     TrayDto::new(tray, tree, notes, confirmation)
+}
+
+// ------------------------------------------------------------------ suggestions
+
+fn builtin_rules() -> CmdResult<&'static RuleSet> {
+    static RULES: OnceLock<Result<RuleSet, String>> = OnceLock::new();
+    RULES
+        .get_or_init(|| RuleSet::builtin().map_err(|e| e.to_string()))
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Reclaimable space found by the built-in rules in the current scan.
+#[tauri::command]
+pub async fn get_suggestions(state: State<'_, AppState>) -> CmdResult<SuggestionsDto> {
+    let rules = builtin_rules()?;
+    let r = state.result()?;
+    let tree = r.read()?;
+    let groups = suggest(&tree, rules, &MatchContext::current());
+    Ok(SuggestionsDto::new(&tree, &groups))
+}
+
+/// Adds suggestions to the tray. `rule_id = None` means every Safe item.
+/// Only Safe, addable rules can be added in bulk (PRD R3); Review and
+/// Caution items must be added one by one with `tray_add`.
+#[tauri::command]
+pub async fn add_suggestions_to_tray(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    rule_id: Option<String>,
+) -> CmdResult<TrayDto> {
+    let rules = builtin_rules()?;
+    if let Some(id) = &rule_id {
+        let rule = rules.get(id).ok_or("unknown rule")?;
+        if rule.safety != Safety::Safe || !rule.addable {
+            return Err(format!(
+                "{} items must be reviewed and added one at a time",
+                rule.name
+            ));
+        }
+    }
+    state.with_tray(
+        |tray, tree, ctx| {
+            let ids: Vec<NodeId> = suggest(tree, rules, &MatchContext::current())
+                .iter()
+                .filter(|g| g.rule.safety == Safety::Safe && g.rule.addable)
+                .filter(|g| rule_id.as_deref().is_none_or(|id| g.rule.id == id))
+                .flat_map(|g| g.items.iter().map(|s| s.node))
+                .collect();
+            let out = tray.add(tree, &ids, ctx);
+            tray_dto(tray, tree, ctx, describe_add(&out, tree))
+        },
+        |tree| cleanup_context(&app, tree),
+    )
 }
 
 // ------------------------------------------------------------------ cleanup

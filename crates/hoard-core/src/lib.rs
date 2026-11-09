@@ -21,6 +21,7 @@ pub mod disks;
 pub mod error;
 pub mod format;
 pub mod platform;
+pub mod rules;
 pub mod scan;
 pub mod size;
 pub mod tree;

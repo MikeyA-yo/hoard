@@ -699,3 +699,39 @@ fn ui_confirmation_phrase_matches_what_the_engine_requires() {
     };
     assert_eq!(shown, Some(expected));
 }
+
+#[test]
+fn virtual_disks_and_folders_containing_them_are_protected() {
+    let fx = Fixture::new();
+    fx.file("Docker/wsl/disk/docker_data.vhdx", 4_096);
+    fx.file("Ubuntu/LocalState/EXT4.VHDX", 4_096);
+    fx.file("vm/Docker.raw", 4_096);
+    fx.file("other/fine.vhdx", 4_096);
+    let s = setup(fx);
+    let ids = [
+        s.id("Docker/wsl/disk/docker_data.vhdx"),
+        s.id("Docker"),
+        s.id("Ubuntu/LocalState/EXT4.VHDX"),
+        s.id("vm/Docker.raw"),
+        s.id("vm"),
+    ];
+    let report = s.run(&ids, CleanupMode::Permanent);
+    for id in ids {
+        assert!(
+            matches!(
+                outcome(&report, id),
+                ItemOutcome::Skipped(SkipReason::Protected { .. })
+            ),
+            "{report:?}"
+        );
+    }
+    assert!(s.fx.path("Docker/wsl/disk/docker_data.vhdx").exists());
+    assert!(s.fx.path("vm/Docker.raw").exists());
+    // An unrelated .vhdx is not special.
+    let other = s.id("other/fine.vhdx");
+    let report = s.run(&[other], CleanupMode::Permanent);
+    assert!(
+        matches!(outcome(&report, other), ItemOutcome::Removed),
+        "{report:?}"
+    );
+}

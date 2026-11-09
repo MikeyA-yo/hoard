@@ -5,6 +5,7 @@ import type {
   CleanupMode,
   CleanupProgress,
   CleanupReport,
+  Suggestions,
   Tray,
   ColorBy,
   Disk,
@@ -20,6 +21,7 @@ import type {
 } from "./types";
 
 export type Screen = "home" | "scanning" | "results";
+export type MainView = "map" | "suggestions";
 export type SideTab = "contents" | "files" | "dirs" | "errors" | "tray";
 
 /** A cleanup run. `runId` is generated here before the backend is called. */
@@ -69,6 +71,9 @@ interface HoardState {
   toast: string | null;
   tray: Tray | null;
   cleanup: CleanupRun | null;
+  mainView: MainView;
+  suggestions: Suggestions | null;
+  suggestionsLoading: boolean;
 
   loadTargets: () => Promise<void>;
   startScan: (path: string, opts?: ScanOpts) => Promise<void>;
@@ -100,6 +105,10 @@ interface HoardState {
   cancelCleanup: () => Promise<void>;
   onCleanupProgress: (p: CleanupProgress) => void;
   dismissCleanup: () => void;
+
+  setMainView: (v: MainView) => void;
+  loadSuggestions: () => Promise<void>;
+  addSuggestions: (ruleId: string | null) => Promise<void>;
 }
 
 /** True if `next` should replace `cur`: a newer scan, or a newer version of the same scan's tray. */
@@ -116,6 +125,7 @@ function newRunId(): string {
 }
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
+let suggestionsToken = 0;
 
 export const useHoard = create<HoardState>()((set, get) => ({
   screen: "home",
@@ -144,6 +154,9 @@ export const useHoard = create<HoardState>()((set, get) => ({
   toast: null,
   tray: null,
   cleanup: null,
+  mainView: "map",
+  suggestions: null,
+  suggestionsLoading: false,
 
   loadTargets: async () => {
     try {
@@ -208,7 +221,9 @@ export const useHoard = create<HoardState>()((set, get) => ({
       sideTab: "contents",
       // Show sizes the way the scan was asked for; the toggle can change it.
       mode: d.summary.sizeMode,
+      suggestions: null,
     });
+    if (get().mainView === "suggestions") void get().loadSuggestions();
     void get().navigate(d.summary.rootId);
     // A new scan starts a new (empty) tray on the backend.
     void get().refreshTray();
@@ -346,6 +361,7 @@ export const useHoard = create<HoardState>()((set, get) => ({
       const summary = await api.getSummary();
       set({ summary });
       await get().refreshTray();
+      if (get().suggestions) void get().loadSuggestions();
       const cur = get().currentId;
       if (cur !== null) {
         const d = await api.getNode(cur);
@@ -368,6 +384,37 @@ export const useHoard = create<HoardState>()((set, get) => ({
 
   dismissCleanup: () => {
     if (get().cleanup?.status !== "running") set({ cleanup: null });
+  },
+
+  setMainView: (mainView) => {
+    set({ mainView });
+    if (mainView === "suggestions" && !get().suggestions) void get().loadSuggestions();
+  },
+
+  loadSuggestions: async () => {
+    // Only the latest request may update the view.
+    const token = ++suggestionsToken;
+    set({ suggestionsLoading: true });
+    try {
+      const s = await api.getSuggestions();
+      if (token === suggestionsToken) set({ suggestions: s });
+    } catch (e) {
+      if (token === suggestionsToken) get().showToast(errorMessage(e));
+    } finally {
+      if (token === suggestionsToken) set({ suggestionsLoading: false });
+    }
+  },
+
+  addSuggestions: async (ruleId) => {
+    const before = get().tray?.count ?? 0;
+    try {
+      const t = await api.addSuggestionsToTray(ruleId);
+      get().applyTray(t);
+      const added = t.count - before;
+      get().showToast(added > 0 ? `Added ${added} item${added === 1 ? "" : "s"} to the Cleanup Tray` : (t.notes[0] ?? "Already in the tray"));
+    } catch (e) {
+      get().showToast(errorMessage(e));
+    }
   },
 }));
 

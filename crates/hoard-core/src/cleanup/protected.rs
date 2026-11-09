@@ -54,6 +54,43 @@ pub fn check(path: &Path, ctx: &CleanupContext) -> Option<Reason> {
     None
 }
 
+/// File names never removed anywhere: virtual disks whose deletion destroys
+/// everything inside them (Docker Desktop, WSL distributions, Docker for Mac).
+pub const PROTECTED_FILE_NAMES: &[&str] = &["docker_data.vhdx", "ext4.vhdx", "docker.raw"];
+
+fn is_protected_file_name(name: &std::ffi::OsStr) -> bool {
+    let lower = name.to_string_lossy().to_lowercase();
+    PROTECTED_FILE_NAMES.contains(&lower.as_str())
+}
+
+/// Rejects a node that is, or a folder that contains, a protected virtual
+/// disk. Deleting the containing folder would destroy the disk just the same.
+pub fn check_tree(tree: &crate::tree::Tree, id: crate::tree::NodeId) -> Option<Reason> {
+    use crate::tree::NodeFlags;
+    let node = tree.get(id)?;
+    if is_protected_file_name(&node.name) {
+        return Some(
+            "this is a Docker or WSL virtual disk; deleting it destroys everything inside it              (use docker system prune, or wsl --unregister for a distro)"
+                .into(),
+        );
+    }
+    let mut stack: Vec<crate::tree::NodeId> = node.children.clone();
+    while let Some(cur) = stack.pop() {
+        let Some(n) = tree.get(cur) else { continue };
+        if n.flags.contains(NodeFlags::REMOVED) {
+            continue;
+        }
+        if is_protected_file_name(&n.name) {
+            return Some(format!(
+                "it contains a Docker or WSL virtual disk ({})",
+                n.name.to_string_lossy()
+            ));
+        }
+        stack.extend_from_slice(&n.children);
+    }
+    None
+}
+
 /// Files directly in a drive root that are never removable (Windows).
 const SYSTEM_ROOT_FILES: &[&str] = &[
     "pagefile.sys",

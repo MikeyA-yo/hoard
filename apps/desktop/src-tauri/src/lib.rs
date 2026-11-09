@@ -31,6 +31,8 @@ pub fn run() {
             commands::tray_remove,
             commands::tray_clear,
             commands::tray_list,
+            commands::get_suggestions,
+            commands::add_suggestions_to_tray,
             commands::execute_cleanup,
             commands::cancel_cleanup,
         ])

@@ -1,0 +1,272 @@
+# Hoard built-in suggestion rules.
+#
+# Each rule: id, name, match, safety (safe | review | caution), explain,
+# regenerate (optional), group (dev | packages | caches | downloads | temp |
+# system), os (optional list: windows | macos | linux), addable (default
+# true; false = shown for information only, never added to the tray).
+#
+# Matchers (all given ones must hold):
+#   dir_name / file_name   node is a folder / file with one of these names
+#   ext_in                 node is a file with one of these extensions
+#   sibling                its parent folder contains one of these names
+#   contains_file          the folder directly contains one of these names
+#   path_is                node is exactly one of these paths
+#   parent_is              node sits directly inside one of these paths
+#   path_under             node is somewhere below one of these paths
+#   older_than_days        nothing inside changed for this many days
+#   min_bytes              at least this big
+#
+# Paths may use ~ and these placeholders: {home} {downloads}
+# {local_app_data} {app_data} {temp} {cache}
+#
+# The first matching rule wins, and nothing inside a matched folder is
+# matched again. Order matters: put specific rules before general ones.
+
+# ---------------------------------------------------------------- package caches
+
+[[rule]]
+id = "npm_cache"
+name = "npm cache"
+match = { path_is = ["{local_app_data}/npm-cache", "~/.npm/_cacache"] }
+safety = "safe"
+group = "packages"
+explain = "Downloaded npm packages kept for faster installs."
+regenerate = "npm downloads packages again when needed. Or run: npm cache clean --force"
+
+[[rule]]
+id = "pnpm_store"
+name = "pnpm store"
+match = { path_is = ["{local_app_data}/pnpm/store", "~/.local/share/pnpm/store", "~/Library/pnpm/store"] }
+safety = "safe"
+group = "packages"
+explain = "Shared package store used by pnpm projects."
+regenerate = "Run pnpm install in your projects. Or run: pnpm store prune"
+
+[[rule]]
+id = "yarn_cache"
+name = "Yarn cache"
+match = { path_is = ["{local_app_data}/Yarn/Cache", "~/.cache/yarn", "~/Library/Caches/Yarn"] }
+safety = "safe"
+group = "packages"
+explain = "Downloaded Yarn packages kept for faster installs."
+regenerate = "Yarn downloads packages again when needed. Or run: yarn cache clean"
+
+[[rule]]
+id = "bun_cache"
+name = "Bun install cache"
+match = { path_is = ["~/.bun/install/cache"] }
+safety = "safe"
+group = "packages"
+explain = "Packages downloaded by bun install."
+regenerate = "bun downloads packages again when needed."
+
+[[rule]]
+id = "cargo_registry"
+name = "Cargo registry cache"
+match = { path_is = ["~/.cargo/registry/cache", "~/.cargo/registry/src", "~/.cargo/git/checkouts"] }
+safety = "safe"
+group = "packages"
+explain = "Downloaded and unpacked Rust crates."
+regenerate = "cargo downloads crates again on the next build."
+
+[[rule]]
+id = "pip_cache"
+name = "pip cache"
+match = { path_is = ["{local_app_data}/pip/Cache", "~/.cache/pip", "~/Library/Caches/pip"] }
+safety = "safe"
+group = "packages"
+explain = "Downloaded Python packages kept for faster installs."
+regenerate = "pip downloads packages again when needed. Or run: pip cache purge"
+
+[[rule]]
+id = "uv_cache"
+name = "uv cache"
+match = { path_is = ["{local_app_data}/uv/cache", "~/.cache/uv"] }
+safety = "safe"
+group = "packages"
+explain = "Python packages cached by uv."
+regenerate = "uv downloads packages again when needed. Or run: uv cache clean"
+
+[[rule]]
+id = "gradle_cache"
+name = "Gradle caches"
+match = { path_is = ["~/.gradle/caches"] }
+safety = "safe"
+group = "packages"
+explain = "Downloaded Gradle dependencies and build caches."
+regenerate = "Gradle downloads dependencies again on the next build."
+
+[[rule]]
+id = "go_build_cache"
+name = "Go build cache"
+match = { path_is = ["{local_app_data}/go-build", "~/.cache/go-build", "~/Library/Caches/go-build"] }
+safety = "safe"
+group = "packages"
+explain = "Compiled Go packages cached to speed up builds."
+regenerate = "Go rebuilds it automatically. Or run: go clean -cache"
+
+[[rule]]
+id = "go_mod_cache"
+name = "Go module cache"
+match = { path_is = ["~/go/pkg/mod"] }
+safety = "review"
+group = "packages"
+explain = "Downloaded Go modules. Files in it are read-only, so deleting it directly usually fails part way."
+regenerate = "Run: go clean -modcache (instead of deleting it here)"
+addable = false
+
+[[rule]]
+id = "nuget_packages"
+name = "NuGet packages"
+match = { path_is = ["~/.nuget/packages"] }
+safety = "review"
+group = "packages"
+explain = "Downloaded .NET packages."
+regenerate = "Restored on the next dotnet build or restore. Or run: dotnet nuget locals all --clear"
+
+# ---------------------------------------------------------------- disk images (never raw-delete)
+
+[[rule]]
+id = "docker_disk"
+name = "Docker / WSL disk image"
+match = { file_name = ["docker_data.vhdx", "ext4.vhdx", "Docker.raw"] }
+safety = "caution"
+group = "system"
+explain = "A virtual disk holding all Docker images, containers or a WSL Linux system. Deleting the file destroys everything inside it."
+regenerate = "Free space inside it instead: docker system prune -a (and wsl --shutdown, then compact the disk)"
+addable = false
+
+# ---------------------------------------------------------------- dev artifacts
+
+[[rule]]
+id = "node_modules"
+name = "Node dependencies"
+match = { dir_name = "node_modules", sibling = "package.json" }
+safety = "safe"
+group = "dev"
+explain = "Installed npm packages for a project."
+regenerate = "Run npm, pnpm or yarn install in the project."
+
+[[rule]]
+id = "rust_target"
+name = "Rust build output"
+match = { dir_name = "target", sibling = "Cargo.toml" }
+safety = "safe"
+group = "dev"
+explain = "Compiled Rust build artifacts for a project."
+regenerate = "Run cargo build in the project (the first build afterwards is slower)."
+
+[[rule]]
+id = "python_venv"
+name = "Python virtual environment"
+match = { contains_file = "pyvenv.cfg" }
+safety = "review"
+group = "dev"
+explain = "A Python virtual environment with installed packages."
+regenerate = "Recreate it (python -m venv .venv) and reinstall requirements."
+
+[[rule]]
+id = "python_caches"
+name = "Python caches"
+match = { dir_name = ["__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"] }
+safety = "safe"
+group = "dev"
+explain = "Bytecode and tool caches Python creates automatically."
+regenerate = "Recreated automatically."
+
+[[rule]]
+id = "js_framework_caches"
+name = "JS framework build caches"
+match = { dir_name = [".next", ".turbo", ".parcel-cache", ".svelte-kit", ".nuxt", ".angular"], sibling = "package.json" }
+safety = "safe"
+group = "dev"
+explain = "Build output and caches from Next.js, Turborepo, Parcel, SvelteKit, Nuxt or Angular."
+regenerate = "Recreated on the next dev or build run."
+
+[[rule]]
+id = "xcode_derived_data"
+name = "Xcode DerivedData"
+match = { path_is = ["~/Library/Developer/Xcode/DerivedData"] }
+safety = "safe"
+group = "dev"
+os = ["macos"]
+explain = "Xcode build products and indexes."
+regenerate = "Recreated on the next build."
+
+[[rule]]
+id = "ios_simulators"
+name = "iOS simulators and device support"
+match = { path_is = ["~/Library/Developer/CoreSimulator", "~/Library/Developer/Xcode/iOS DeviceSupport"] }
+safety = "review"
+group = "dev"
+os = ["macos"]
+explain = "Simulator runtimes and debug symbols for connected devices."
+regenerate = "Downloaded again by Xcode when needed."
+
+# ---------------------------------------------------------------- app caches
+
+[[rule]]
+id = "browser_cache"
+name = "Browser caches"
+match = { dir_name = ["Cache", "Code Cache", "GPUCache", "Service Worker"], path_under = ["{local_app_data}/Google/Chrome/User Data", "{local_app_data}/Microsoft/Edge/User Data", "{local_app_data}/BraveSoftware/Brave-Browser/User Data"] }
+safety = "safe"
+group = "caches"
+explain = "Web pages, scripts and images cached by the browser. Logins and bookmarks are not stored here."
+regenerate = "Rebuilt as you browse. Close the browser first, or some files will be skipped."
+
+[[rule]]
+id = "vscode_cache"
+name = "VS Code caches"
+match = { path_is = ["{app_data}/Code/Cache", "{app_data}/Code/CachedData", "{app_data}/Code/CachedExtensionVSIXs", "{app_data}/Code/Code Cache", "~/Library/Application Support/Code/Cache", "~/Library/Application Support/Code/CachedData", "~/.config/Code/Cache", "~/.config/Code/CachedData"] }
+safety = "safe"
+group = "caches"
+explain = "Caches and downloaded update files kept by VS Code."
+regenerate = "Recreated automatically. Close VS Code first for a complete cleanup."
+
+[[rule]]
+id = "crash_dumps"
+name = "Crash dumps"
+match = { path_is = ["{local_app_data}/CrashDumps"] }
+safety = "safe"
+group = "system"
+os = ["windows"]
+explain = "Memory dumps saved when apps crashed. Only useful for debugging those crashes."
+regenerate = "Not needed."
+
+[[rule]]
+id = "old_temp"
+name = "Old temporary files"
+match = { parent_is = ["{temp}"], older_than_days = 7 }
+safety = "safe"
+group = "temp"
+explain = "Temporary files and folders not touched for a week."
+regenerate = "Not needed. Files still in use are skipped."
+
+[[rule]]
+id = "user_logs"
+name = "App logs"
+match = { path_is = ["~/Library/Logs", "~/.cache/logs"] }
+safety = "safe"
+group = "caches"
+explain = "Log files written by apps."
+regenerate = "Apps create new logs as needed."
+
+# ---------------------------------------------------------------- downloads
+
+[[rule]]
+id = "old_installers"
+name = "Installers and disk images in Downloads"
+match = { path_under = ["{downloads}"], ext_in = ["exe", "msi", "msix", "appx", "iso", "dmg", "pkg", "deb", "rpm", "appimage"] }
+safety = "review"
+group = "downloads"
+explain = "Setup files and disk images you downloaded. Once installed, they are rarely needed."
+regenerate = "Download again from the vendor if needed."
+
+[[rule]]
+id = "old_downloads"
+name = "Old downloads"
+match = { parent_is = ["{downloads}"], older_than_days = 90 }
+safety = "review"
+group = "downloads"
+explain = "Items in Downloads not changed for 90 days or more."
+regenerate = "Cannot be recreated. Check before removing."

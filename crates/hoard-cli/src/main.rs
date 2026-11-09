@@ -23,6 +23,26 @@ struct Cli {
 enum Command {
     /// Scan a folder or drive and show what uses the most space.
     Scan(ScanArgs),
+    /// Scan and list reclaimable space found by the built-in rules.
+    Suggest(SuggestArgs),
+}
+
+#[derive(Args)]
+struct SuggestArgs {
+    /// Folder or drive to scan.
+    path: PathBuf,
+    /// Items to show per rule.
+    #[arg(long, default_value_t = 5)]
+    top: usize,
+    /// Print machine-readable JSON.
+    #[arg(long)]
+    json: bool,
+    /// Descend into other filesystems / volumes.
+    #[arg(long)]
+    cross_fs: bool,
+    /// Hide the live progress line.
+    #[arg(long, short)]
+    quiet: bool,
 }
 
 #[derive(Args)]
@@ -65,6 +85,7 @@ fn main() -> Result<()> {
         .init();
     match Cli::parse().command {
         Command::Scan(args) => run_scan(args),
+        Command::Suggest(args) => run_suggest(args),
     }
 }
 
@@ -80,8 +101,26 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     } else {
         SizeMode::Allocated
     };
+    let (tree, elapsed) = scan_with_progress(&args.path, opts, args.quiet)?;
+
+    if args.json {
+        let report = JsonReport::build(&tree, mode, args.top, args.depth, elapsed.as_millis());
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        println!();
+    } else {
+        print_human(&tree, mode, &args, elapsed.as_secs_f64());
+    }
+    Ok(())
+}
+
+/// Scans `path`, showing a live progress line on stderr unless `quiet`.
+fn scan_with_progress(
+    path: &Path,
+    opts: ScanOptions,
+    quiet: bool,
+) -> Result<(Tree, std::time::Duration)> {
     let (tx, rx) = crossbeam_channel::bounded::<ScanEvent>(64);
-    let show_progress = !args.quiet && std::io::stderr().is_terminal();
+    let show_progress = !quiet && std::io::stderr().is_terminal();
     let printer = thread::spawn(move || {
         let mut printed = false;
         for event in rx {
@@ -115,17 +154,117 @@ fn run_scan(args: ScanArgs) -> Result<()> {
     });
 
     let started = Instant::now();
-    let tree = scan(&args.path, opts, tx, Arc::new(AtomicBool::new(false)))
-        .with_context(|| format!("scanning {}", args.path.display()))?;
+    let tree = scan(path, opts, tx, Arc::new(AtomicBool::new(false)))
+        .with_context(|| format!("scanning {}", path.display()))?;
     let elapsed = started.elapsed();
     let _ = printer.join();
 
+    Ok((tree, elapsed))
+}
+
+fn run_suggest(args: SuggestArgs) -> Result<()> {
+    use hoard_core::rules::{suggest, MatchContext, RuleSet, Safety};
+
+    let opts = ScanOptions {
+        cross_filesystems: args.cross_fs,
+        ..ScanOptions::default()
+    };
+    let (tree, _) = scan_with_progress(&args.path, opts, args.quiet)?;
+    let rules = RuleSet::builtin().context("loading built-in rules")?;
+    let groups = suggest(&tree, &rules, &MatchContext::current());
+
     if args.json {
-        let report = JsonReport::build(&tree, mode, args.top, args.depth, elapsed.as_millis());
-        serde_json::to_writer_pretty(std::io::stdout().lock(), &report)?;
+        #[derive(Serialize)]
+        struct JsonItem {
+            path: PathBuf,
+            size_allocated: u64,
+            size_apparent: u64,
+            newest_mtime: i64,
+        }
+        #[derive(Serialize)]
+        struct JsonGroup<'a> {
+            rule: &'a hoard_core::rules::Rule,
+            total_allocated: u64,
+            total_apparent: u64,
+            count: usize,
+            items: Vec<JsonItem>,
+        }
+        let out: Vec<JsonGroup<'_>> = groups
+            .iter()
+            .map(|g| JsonGroup {
+                rule: g.rule,
+                total_allocated: g.total_allocated,
+                total_apparent: g.total_apparent,
+                count: g.items.len(),
+                items: g
+                    .items
+                    .iter()
+                    .take(args.top)
+                    .map(|i| JsonItem {
+                        path: tree.path(i.node).unwrap_or_default(),
+                        size_allocated: i.size_allocated,
+                        size_apparent: i.size_apparent,
+                        newest_mtime: i.newest_mtime,
+                    })
+                    .collect(),
+            })
+            .collect();
+        serde_json::to_writer_pretty(std::io::stdout().lock(), &out)?;
         println!();
-    } else {
-        print_human(&tree, mode, &args, elapsed.as_secs_f64());
+        return Ok(());
+    }
+
+    let total = |s: Safety| -> u64 {
+        groups
+            .iter()
+            .filter(|g| g.rule.safety == s && (g.rule.addable || s != Safety::Safe))
+            .map(|g| g.total_allocated)
+            .sum()
+    };
+    println!(
+        "{}: Safe {} (removable here) · Review {} · Caution {} (on disk)",
+        tree.root_path().display(),
+        format::bytes(total(Safety::Safe)),
+        format::bytes(total(Safety::Review)),
+        format::bytes(total(Safety::Caution)),
+    );
+    if groups.is_empty() {
+        println!("\nNothing matched the built-in rules here.");
+    }
+    for g in &groups {
+        let label = match g.rule.safety {
+            Safety::Safe => "SAFE",
+            Safety::Review => "REVIEW",
+            Safety::Caution => "CAUTION",
+        };
+        println!();
+        println!(
+            "[{label}] {}  {}  ({} item{}){}",
+            g.rule.name,
+            format::bytes(g.total_allocated),
+            format::count(g.items.len() as u64),
+            if g.items.len() == 1 { "" } else { "s" },
+            if g.rule.addable {
+                ""
+            } else {
+                "  (info only, not removable here)"
+            }
+        );
+        println!("    {}", g.rule.explain);
+        if let Some(r) = &g.rule.regenerate {
+            println!("    Comes back / instead: {r}");
+        }
+        for i in g.items.iter().take(args.top) {
+            let path = tree.path(i.node).unwrap_or_default();
+            println!(
+                "    {:>10}  {}",
+                format::bytes(i.size_allocated),
+                path.display()
+            );
+        }
+        if g.items.len() > args.top {
+            println!("    ... and {} more", g.items.len() - args.top);
+        }
     }
     Ok(())
 }

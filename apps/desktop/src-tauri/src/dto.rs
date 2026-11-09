@@ -4,6 +4,7 @@
 use hoard_core::classify::{category_for, Category};
 use hoard_core::cleanup::{CleanupMode, CleanupReport, Tray};
 use hoard_core::disks::DiskInfo;
+use hoard_core::rules::{Group as RuleGroupKind, RuleMatches, Safety};
 use hoard_core::view::{TreemapNode, MAX_VIEW_ITEMS};
 use hoard_core::{NodeId, NodeKind, ScanError, ScanErrorKind, SizeMode, Tree};
 use serde::{Deserialize, Serialize};
@@ -77,6 +78,95 @@ impl TrayDto {
             file_count: 0,
             permanent_confirmation: None,
             notes: Vec::new(),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ suggestions
+
+/// Items listed per rule; the rest are counted, not sent.
+pub const MAX_SUGGESTION_ITEMS: usize = 200;
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionItemDto {
+    pub node: NodeDto,
+    pub path: String,
+    pub newest_mtime: i64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionGroupDto {
+    pub rule_id: String,
+    pub name: String,
+    pub safety: Safety,
+    pub group: RuleGroupKind,
+    pub explain: String,
+    pub regenerate: Option<String>,
+    pub addable: bool,
+    pub total_allocated: u64,
+    pub total_apparent: u64,
+    pub count: usize,
+    pub items: Vec<SuggestionItemDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SuggestionsDto {
+    pub groups: Vec<SuggestionGroupDto>,
+    /// Bulk-addable total: Safe and addable groups only.
+    pub safe_total: u64,
+    pub safe_count: usize,
+    pub review_total: u64,
+    pub caution_total: u64,
+}
+
+impl SuggestionsDto {
+    pub fn new(tree: &Tree, groups: &[RuleMatches<'_>]) -> Self {
+        let sum = |pred: &dyn Fn(&RuleMatches<'_>) -> bool| -> u64 {
+            groups
+                .iter()
+                .filter(|g| pred(g))
+                .map(|g| g.total_allocated)
+                .sum()
+        };
+        SuggestionsDto {
+            safe_total: sum(&|g| g.rule.safety == Safety::Safe && g.rule.addable),
+            safe_count: groups
+                .iter()
+                .filter(|g| g.rule.safety == Safety::Safe && g.rule.addable)
+                .map(|g| g.items.len())
+                .sum(),
+            review_total: sum(&|g| g.rule.safety == Safety::Review),
+            caution_total: sum(&|g| g.rule.safety == Safety::Caution),
+            groups: groups
+                .iter()
+                .map(|g| SuggestionGroupDto {
+                    rule_id: g.rule.id.clone(),
+                    name: g.rule.name.clone(),
+                    safety: g.rule.safety,
+                    group: g.rule.group,
+                    explain: g.rule.explain.clone(),
+                    regenerate: g.rule.regenerate.clone(),
+                    addable: g.rule.addable,
+                    total_allocated: g.total_allocated,
+                    total_apparent: g.total_apparent,
+                    count: g.items.len(),
+                    items: g
+                        .items
+                        .iter()
+                        .take(MAX_SUGGESTION_ITEMS)
+                        .filter_map(|s| {
+                            Some(SuggestionItemDto {
+                                node: NodeDto::new(tree, s.node)?,
+                                path: tree.path(s.node)?.to_string_lossy().into_owned(),
+                                newest_mtime: s.newest_mtime,
+                            })
+                        })
+                        .collect(),
+                })
+                .collect(),
         }
     }
 }
