@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { onCleanupProgress, onScanEvents } from "./api";
+import { onCleanupProgress, onDupesProgress, onScanEvents } from "./api";
 import { useHoard } from "./store";
 import { HomeScreen } from "./components/HomeScreen";
 import { ScanningScreen } from "./components/ScanningScreen";
@@ -20,6 +20,7 @@ export function App() {
     };
     void onScanEvents({ progress: s.onProgress, batch: s.onBatch, done: s.onDone }).then(keep);
     void onCleanupProgress(s.onCleanupProgress).then(keep);
+    void onDupesProgress(s.onDupesProgress).then(keep);
     return () => {
       disposed = true;
       offs.forEach((off) => off());

@@ -7,7 +7,13 @@ import type {
   Batch,
   CleanupMode,
   CleanupProgress,
+  Apps,
   CategoryTotal,
+  DiffEntry,
+  DupesPage,
+  DupesProgress,
+  DupesSummary,
+  History,
   CleanupReport,
   Projects,
   Suggestions,
@@ -61,9 +67,25 @@ export const api = {
     invoke<LargestItem[]>("get_category_files", { category, limit, mode }),
   getProjects: () => invoke<Projects>("get_projects"),
   getTrashSize: () => invoke<TrashSize | null>("get_trash_size"),
+
+  /** Resolves when the search finishes; `runId` is chosen by the caller up front. */
+  findDuplicates: (runId: string, minSize: number) => invoke<DupesSummary>("find_duplicates", { runId, minSize }),
+  cancelDuplicates: (runId: string) => invoke<boolean>("cancel_duplicates", { runId }),
+  getDuplicates: (offset: number, limit: number) => invoke<DupesPage>("get_duplicates", { offset, limit }),
+  /** Keep one copy, put the others in the tray. */
+  trayAddDuplicates: (keep: number, remove: number[]) => invoke<Tray>("tray_add_duplicates", { keep, remove }),
+  getHistory: () => invoke<History>("get_history"),
+  diffSnapshots: (older: number, newer: number, mode: SizeMode, limit: number) =>
+    invoke<DiffEntry[]>("diff_snapshots", { older, newer, mode, limit }),
+  getApps: () => invoke<Apps>("get_apps"),
   /** `ruleId` null adds every Safe item; only Safe rules can be bulk-added. */
   addSuggestionsToTray: (ruleId: string | null) => invoke<Tray>("add_suggestions_to_tray", { ruleId }),
 };
+
+/** Subscribes to duplicate-search progress events. */
+export function onDupesProgress(handler: (p: DupesProgress) => void): Promise<UnlistenFn> {
+  return listen<DupesProgress>("dupes://progress", (e) => handler(e.payload));
+}
 
 /** Subscribes to cleanup progress events. */
 export function onCleanupProgress(handler: (p: CleanupProgress) => void): Promise<UnlistenFn> {

@@ -7,6 +7,8 @@
 //! - Cheap safety checks run on add for early feedback. The full pipeline
 //!   (including disk re-validation) still runs again at execution.
 
+use std::collections::HashMap;
+
 use super::{static_checks, CleanupContext, SkipReason};
 use crate::size::SizeMode;
 use crate::tree::{NodeId, Tree};
@@ -30,6 +32,8 @@ pub struct Tray {
     generation: u64,
     version: u64,
     items: Vec<NodeId>,
+    /// Duplicate items -> the copy the user chose to keep.
+    keepers: HashMap<NodeId, NodeId>,
 }
 
 impl Tray {
@@ -39,6 +43,7 @@ impl Tray {
             generation,
             version: 1,
             items: Vec::new(),
+            keepers: HashMap::new(),
         }
     }
 
@@ -73,6 +78,9 @@ impl Tray {
                 .items
                 .iter()
                 .partition(|&&t| tree.is_ancestor_or_self(id, t));
+            for r in &inside {
+                self.keepers.remove(r);
+            }
             out.replaced.extend(inside);
             self.items = keep;
             self.items.push(id);
@@ -84,10 +92,48 @@ impl Tray {
         out
     }
 
+    /// Duplicate items and the copy kept for each.
+    pub fn keepers(&self) -> &HashMap<NodeId, NodeId> {
+        &self.keepers
+    }
+
+    /// Adds duplicate copies of `keep` to the tray, remembering `keep` so a
+    /// run only removes them while it is intact. Refuses `keep` itself, any
+    /// folder containing it, and everything if `keep` is already in the tray.
+    pub fn add_duplicates(
+        &mut self,
+        tree: &Tree,
+        keep: NodeId,
+        remove: &[NodeId],
+        ctx: &CleanupContext,
+    ) -> AddOutcome {
+        let keeper_in_tray = self
+            .items
+            .iter()
+            .any(|&t| tree.is_ancestor_or_self(t, keep));
+        let mut out = AddOutcome::default();
+        for &id in remove {
+            if keeper_in_tray || tree.is_ancestor_or_self(id, keep) {
+                out.rejected.push((id, SkipReason::KeeperInRun));
+                continue;
+            }
+            let one = self.add(tree, &[id], ctx);
+            for added in &one.added {
+                self.keepers.insert(*added, keep);
+            }
+            out.added.extend(one.added);
+            out.covered.extend(one.covered);
+            out.replaced.extend(one.replaced);
+            out.rejected.extend(one.rejected);
+        }
+        out
+    }
+
     /// Removes items (unknown ids are ignored).
     pub fn remove(&mut self, ids: &[NodeId]) {
         let before = self.items.len();
         self.items.retain(|i| !ids.contains(i));
+        self.keepers.retain(|item, _| !ids.contains(item));
         if self.items.len() != before {
             self.version += 1;
         }
@@ -96,6 +142,7 @@ impl Tray {
     /// Empties the tray.
     pub fn clear(&mut self) {
         self.items.clear();
+        self.keepers.clear();
         self.version += 1;
     }
 

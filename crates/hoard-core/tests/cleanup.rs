@@ -735,3 +735,128 @@ fn virtual_disks_and_folders_containing_them_are_protected() {
         "{report:?}"
     );
 }
+
+// ---------------------------------------------------------------- M4: modification + duplicate keepers
+
+fn append(path: &Path, bytes: &[u8]) {
+    use std::io::Write;
+    let mut f = fs::OpenOptions::new().append(true).open(path).unwrap();
+    f.write_all(bytes).unwrap();
+}
+
+#[test]
+fn file_modified_after_scan_is_skipped() {
+    let fx = Fixture::new();
+    fx.file("doc.txt", 1_000);
+    let s = setup(fx);
+    let id = s.id("doc.txt");
+    append(&s.fx.path("doc.txt"), b"new paragraph");
+    let report = s.run(&[id], CleanupMode::Permanent);
+    assert!(
+        matches!(
+            outcome(&report, id),
+            ItemOutcome::Skipped(SkipReason::Changed { .. })
+        ),
+        "{report:?}"
+    );
+    assert!(s.fx.path("doc.txt").exists());
+}
+
+/// Two identical files; `b` is a duplicate whose kept copy is `a`.
+fn dup_setup() -> (Setup, NodeId, NodeId) {
+    let fx = Fixture::new();
+    fx.file("keep/a.bin", 10_000);
+    fx.file("b.bin", 10_000);
+    let mut s = setup(fx);
+    let (a, b) = (s.id("keep/a.bin"), s.id("b.bin"));
+    s.ctx.keepers.insert(b, a);
+    (s, a, b)
+}
+
+#[test]
+fn duplicate_is_removed_when_its_kept_copy_is_intact() {
+    let (s, _a, b) = dup_setup();
+    let report = s.run(&[b], CleanupMode::Permanent);
+    assert!(
+        matches!(outcome(&report, b), ItemOutcome::Removed),
+        "{report:?}"
+    );
+    assert!(s.fx.path("keep/a.bin").exists());
+}
+
+#[test]
+fn duplicate_is_kept_when_its_kept_copy_is_also_being_removed() {
+    let (s, a, b) = dup_setup();
+    let report = s.run(&[a, b], CleanupMode::Permanent);
+    assert!(
+        matches!(
+            outcome(&report, b),
+            ItemOutcome::Skipped(SkipReason::KeeperInRun)
+        ),
+        "{report:?}"
+    );
+    // At least one copy always survives.
+    assert!(s.fx.path("b.bin").exists());
+}
+
+#[test]
+fn duplicate_is_kept_when_a_folder_holding_the_kept_copy_is_removed() {
+    let (s, _a, b) = dup_setup();
+    let keep_dir = s.id("keep");
+    let report = s.run(&[keep_dir, b], CleanupMode::Permanent);
+    assert!(
+        matches!(
+            outcome(&report, b),
+            ItemOutcome::Skipped(SkipReason::KeeperInRun)
+        ),
+        "{report:?}"
+    );
+    assert!(s.fx.path("b.bin").exists());
+}
+
+#[test]
+fn duplicate_is_kept_when_its_kept_copy_changed_or_vanished() {
+    let (s, _a, b) = dup_setup();
+    append(&s.fx.path("keep/a.bin"), b"edited");
+    let report = s.run(&[b], CleanupMode::Permanent);
+    assert!(
+        matches!(
+            outcome(&report, b),
+            ItemOutcome::Skipped(SkipReason::KeeperChanged { .. })
+        ),
+        "{report:?}"
+    );
+
+    let (s, _a, b) = dup_setup();
+    fs::remove_file(s.fx.path("keep/a.bin")).unwrap();
+    let report = s.run(&[b], CleanupMode::Permanent);
+    assert!(
+        matches!(
+            outcome(&report, b),
+            ItemOutcome::Skipped(SkipReason::KeeperChanged { .. })
+        ),
+        "{report:?}"
+    );
+    assert!(s.fx.path("b.bin").exists());
+}
+
+#[test]
+fn tray_records_keepers_and_forgets_them_with_the_item() {
+    let fx = Fixture::new();
+    fx.file("a.bin", 100);
+    fx.file("b.bin", 100);
+    fx.file("c.bin", 100);
+    let s = setup(fx);
+    let tree = s.tree.read().unwrap();
+    let (a, b, c) = (s.id("a.bin"), s.id("b.bin"), s.id("c.bin"));
+    let mut tray = Tray::new(1);
+    let out = tray.add_duplicates(&tree, a, &[b, c, a], &s.ctx);
+    assert_eq!(out.added, vec![b, c]);
+    assert!(matches!(out.rejected[0], (id, SkipReason::KeeperInRun) if id == a));
+    assert_eq!(tray.keepers().get(&b), Some(&a));
+    tray.remove(&[b]);
+    assert!(!tray.keepers().contains_key(&b));
+    assert_eq!(tray.keepers().get(&c), Some(&a));
+    tray.clear();
+    assert!(tray.keepers().is_empty());
+}

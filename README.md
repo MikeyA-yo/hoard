@@ -12,7 +12,7 @@ how the code is organised.
 | M1 Desktop viewer | Done (Windows verified; macOS/Linux untested) |
 | M2 Cleanup | Done (Windows verified; real Recycle Bin test is manual) |
 | M3 Lenses + suggestions | Done (Windows verified) |
-| M4 Apps, duplicates, history | Not started |
+| M4 Apps, duplicates, history | Done (Windows verified; Apps lens is Windows-only for now) |
 | M5 Platform depth | Not started |
 
 ## CLI
@@ -96,6 +96,27 @@ sort by least recently active to find abandoned projects) and **File types**
 (totals per category, then the largest files of one). The Tray shows how much
 the Recycle Bin is holding, since that space is only freed once it is
 emptied.
+
+## Duplicates, history and apps (M4)
+
+- **Duplicates**: files of equal size are compared by a BLAKE3 hash of their
+  first and last 64 KiB, then fully. Per set you choose the copy to keep and
+  the others go to the tray. A copy is only removed if the kept copy still
+  exists, is unchanged, and is not being removed in the same run. Any file
+  modified after the scan is skipped by cleanup.
+- **History**: after every complete scan a compact snapshot (every folder to
+  depth 6 plus any deeper folder over 50 MB) is saved under the app data
+  folder; the results screen shows "Since the last scan" with the biggest
+  growers, and History compares any two snapshots. Snapshots use postcard +
+  LZ4 (`lz4_flex`, pure Rust) instead of zstd, so no C cross-compiler is
+  needed for the core.
+- **Apps** (Windows): installed apps from the Uninstall registry keys, with
+  their install folder (exact, uninstall to remove) and data folders in
+  AppData / ProgramData matched by app or publisher name (likely, added one
+  at a time).
+
+Dev-only overrides for automated runs (debug builds): `HOARD_ACTION_LOG`,
+`HOARD_SNAPSHOT_DIR`.
 
 ## Development
 

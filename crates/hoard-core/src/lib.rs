@@ -15,9 +15,11 @@
 
 #![warn(missing_docs)]
 
+pub mod apps;
 pub mod classify;
 pub mod cleanup;
 pub mod disks;
+pub mod dupes;
 pub mod error;
 pub mod format;
 pub mod lenses;
@@ -25,6 +27,7 @@ pub mod platform;
 pub mod rules;
 pub mod scan;
 pub mod size;
+pub mod snapshot;
 pub mod tree;
 pub mod view;
 

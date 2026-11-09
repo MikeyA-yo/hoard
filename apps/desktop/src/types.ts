@@ -266,3 +266,90 @@ export interface TrashSize {
   bytes: number;
   items: number;
 }
+
+// ------------------------------------------------------------------ M4: duplicates, history, apps
+
+export interface DupesProgress {
+  runId: string;
+  stage: number;
+  filesDone: number;
+  filesTotal: number;
+  bytesDone: number;
+  bytesTotal: number;
+}
+
+export interface DupesSummary {
+  runId: string;
+  groups: number;
+  wasted: number;
+  unreadable: number;
+  cancelled: boolean;
+}
+
+export interface DupFile {
+  node: NodeInfo;
+  path: string;
+}
+
+export interface DupGroup {
+  size: number;
+  wasted: number;
+  files: DupFile[];
+}
+
+export interface DupesPage {
+  ready: boolean;
+  totalGroups: number;
+  wasted: number;
+  unreadable: number;
+  groups: DupGroup[];
+}
+
+export type ChangeKind = "grew" | "shrank" | "new" | "removed";
+
+export interface SnapshotInfo {
+  takenAt: number;
+  totalAllocated: number;
+}
+
+export interface DiffEntry {
+  path: string;
+  before: number | null;
+  after: number | null;
+  change: number;
+  kind: ChangeKind;
+}
+
+export interface Growth {
+  since: number;
+  change: number;
+  top: DiffEntry[];
+}
+
+export interface History {
+  snapshots: SnapshotInfo[];
+  growth: Growth | null;
+}
+
+export type Confidence = "exact" | "likely";
+
+export interface AppFolder {
+  node: NodeInfo;
+  path: string;
+  confidence: Confidence;
+}
+
+export interface AppInfo {
+  name: string;
+  publisher: string | null;
+  version: string | null;
+  estimatedSize: number | null;
+  total: number;
+  install: AppFolder | null;
+  data: AppFolder[];
+}
+
+export interface Apps {
+  apps: AppInfo[];
+  registered: number;
+}

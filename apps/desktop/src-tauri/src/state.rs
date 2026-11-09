@@ -10,10 +10,12 @@
 //!   scan, a whole cleanup run or a file deletion. Lock order is always
 //!   state mutex first, then tree lock.
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
 
 use hoard_core::cleanup::{AddOutcome, CleanupContext, Tray};
+use hoard_core::dupes::DupResult;
 use hoard_core::{NodeId, Tree};
 
 /// The result of a finished (or cancelled, partial) scan.
@@ -43,10 +45,22 @@ enum Busy {
         run_id: String,
         cancel: Arc<AtomicBool>,
     },
+    Hashing {
+        run_id: String,
+        cancel: Arc<AtomicBool>,
+    },
+}
+
+/// Duplicate groups found for one scan.
+pub struct StoredDupes {
+    /// The scan they belong to.
+    pub generation: u64,
+    pub result: DupResult,
 }
 
 struct Inner {
     result: Option<Arc<ScanResult>>,
+    dupes: Option<Arc<StoredDupes>>,
     tray: Tray,
     busy: Busy,
     next_scan_id: u64,
@@ -56,6 +70,7 @@ impl Default for Inner {
     fn default() -> Self {
         Inner {
             result: None,
+            dupes: None,
             tray: Tray::new(0),
             busy: Busy::Idle,
             next_scan_id: 0,
@@ -67,6 +82,8 @@ impl Default for Inner {
 pub struct CleanupStart {
     pub result: Arc<ScanResult>,
     pub items: Vec<NodeId>,
+    /// Duplicate items -> the copy kept for each.
+    pub keepers: HashMap<NodeId, NodeId>,
     pub cancel: Arc<AtomicBool>,
 }
 
@@ -99,7 +116,10 @@ impl AppState {
             Busy::Cleaning { .. } => {
                 return Err("a cleanup is running; wait for it to finish".into())
             }
-            Busy::Scanning { cancel, .. } => cancel.store(true, Ordering::Relaxed),
+            // A new scan supersedes a running scan or duplicate search.
+            Busy::Scanning { cancel, .. } | Busy::Hashing { cancel, .. } => {
+                cancel.store(true, Ordering::Relaxed)
+            }
             Busy::Idle => {}
         }
         inner.next_scan_id += 1;
@@ -139,6 +159,7 @@ impl AppState {
             match tree {
                 Some(tree) => {
                     inner.tray = Tray::new(id);
+                    inner.dupes = None;
                     inner.result.replace(Arc::new(ScanResult {
                         generation: id,
                         tree: RwLock::new(tree),
@@ -185,6 +206,9 @@ impl AppState {
             Busy::Idle => {}
             Busy::Scanning { .. } => return Err("a scan is running; wait for it to finish".into()),
             Busy::Cleaning { .. } => return Err("a cleanup is already running".into()),
+            Busy::Hashing { .. } => {
+                return Err("still looking for duplicates; wait for it or stop it first".into())
+            }
         }
         let result = inner.result.clone().ok_or("no scan loaded")?;
         if inner.tray.generation() != result.generation {
@@ -199,9 +223,11 @@ impl AppState {
             run_id: run_id.to_string(),
             cancel: Arc::clone(&cancel),
         };
+        let keepers = inner.tray.keepers().clone();
         Ok(CleanupStart {
             result,
             items,
+            keepers,
             cancel,
         })
     }
@@ -232,6 +258,68 @@ impl AppState {
                 inner.tray.prune_removed(&tree);
             }
         }
+    }
+}
+
+impl AppState {
+    /// Starts a duplicate search over the current scan. Refused unless idle.
+    pub fn begin_dupes(&self, run_id: &str) -> Result<(Arc<ScanResult>, Arc<AtomicBool>), String> {
+        let mut inner = self.lock()?;
+        match inner.busy {
+            Busy::Idle => {}
+            Busy::Scanning { .. } => return Err("a scan is running; wait for it to finish".into()),
+            Busy::Cleaning { .. } => {
+                return Err("a cleanup is running; wait for it to finish".into())
+            }
+            Busy::Hashing { .. } => return Err("already looking for duplicates".into()),
+        }
+        let result = inner.result.clone().ok_or("no scan loaded")?;
+        let cancel = Arc::new(AtomicBool::new(false));
+        inner.busy = Busy::Hashing {
+            run_id: run_id.to_string(),
+            cancel: Arc::clone(&cancel),
+        };
+        Ok((result, cancel))
+    }
+
+    /// Stops a running duplicate search.
+    pub fn cancel_dupes(&self, run_id: &str) -> Result<bool, String> {
+        let inner = self.lock()?;
+        match &inner.busy {
+            Busy::Hashing {
+                run_id: active,
+                cancel,
+            } if active == run_id => {
+                cancel.store(true, Ordering::Relaxed);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    /// Ends a duplicate search; stores the result only if it belongs to the
+    /// scan that is still loaded.
+    pub fn finish_dupes(&self, run_id: &str, generation: u64, result: Option<DupResult>) {
+        let Ok(mut inner) = self.lock() else { return };
+        if matches!(&inner.busy, Busy::Hashing { run_id: active, .. } if active == run_id) {
+            inner.busy = Busy::Idle;
+        }
+        let current = inner.result.as_ref().map(|r| r.generation);
+        if let (Some(result), Some(current)) = (result, current) {
+            if current == generation && !result.cancelled {
+                inner.dupes = Some(Arc::new(StoredDupes { generation, result }));
+            }
+        }
+    }
+
+    /// Duplicate groups for the loaded scan, if a search finished.
+    pub fn dupes(&self) -> Result<Option<Arc<StoredDupes>>, String> {
+        let inner = self.lock()?;
+        let current = inner.result.as_ref().map(|r| r.generation);
+        Ok(inner
+            .dupes
+            .clone()
+            .filter(|d| Some(d.generation) == current))
     }
 }
 

@@ -1,11 +1,13 @@
 //! Serializable DTOs for IPC. Core types are converted here; the frontend
 //! never sees `Tree` or `Node` directly.
 
+use hoard_core::apps::{AppFolder, AppFootprint, Confidence};
 use hoard_core::classify::{category_for, Category};
 use hoard_core::cleanup::{CleanupMode, CleanupReport, Tray};
 use hoard_core::disks::DiskInfo;
 use hoard_core::lenses::{CategoryTotal, Project};
 use hoard_core::rules::{Group as RuleGroupKind, RuleMatches, Safety};
+use hoard_core::snapshot::{ChangeKind, DiffEntry};
 use hoard_core::view::{TreemapNode, MAX_VIEW_ITEMS};
 use hoard_core::{NodeId, NodeKind, ScanError, ScanErrorKind, SizeMode, Tree};
 use serde::{Deserialize, Serialize};
@@ -576,4 +578,160 @@ impl From<&ScanError> for ErrorDto {
 pub struct ErrorsPageDto {
     pub total: usize,
     pub items: Vec<ErrorDto>,
+}
+
+// ------------------------------------------------------------------ duplicates
+
+#[derive(Serialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct DupesProgressDto {
+    pub run_id: String,
+    pub stage: u8,
+    pub files_done: u64,
+    pub files_total: u64,
+    pub bytes_done: u64,
+    pub bytes_total: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupesSummaryDto {
+    pub run_id: String,
+    pub groups: usize,
+    pub wasted: u64,
+    pub unreadable: u64,
+    pub cancelled: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupFileDto {
+    pub node: NodeDto,
+    pub path: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupGroupDto {
+    pub size: u64,
+    pub wasted: u64,
+    pub files: Vec<DupFileDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DupesPageDto {
+    /// False until a search has finished for the loaded scan.
+    pub ready: bool,
+    pub total_groups: usize,
+    pub wasted: u64,
+    pub unreadable: u64,
+    pub groups: Vec<DupGroupDto>,
+}
+
+// ------------------------------------------------------------------ history
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotDto {
+    pub taken_at: i64,
+    pub total_allocated: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiffEntryDto {
+    pub path: String,
+    pub before: Option<u64>,
+    pub after: Option<u64>,
+    pub change: i64,
+    pub kind: ChangeKind,
+}
+
+impl From<&DiffEntry> for DiffEntryDto {
+    fn from(d: &DiffEntry) -> Self {
+        DiffEntryDto {
+            path: d.path.clone(),
+            before: d.before,
+            after: d.after,
+            change: d.change(),
+            kind: d.kind(),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GrowthDto {
+    /// When the earlier snapshot was taken.
+    pub since: i64,
+    pub change: i64,
+    pub top: Vec<DiffEntryDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HistoryDto {
+    /// Newest first.
+    pub snapshots: Vec<SnapshotDto>,
+    /// Latest vs the one before, if there are two.
+    pub growth: Option<GrowthDto>,
+}
+
+// ------------------------------------------------------------------ apps
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppFolderDto {
+    pub node: NodeDto,
+    pub path: String,
+    pub confidence: Confidence,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppDto {
+    pub name: String,
+    pub publisher: Option<String>,
+    pub version: Option<String>,
+    pub estimated_size: Option<u64>,
+    pub total: u64,
+    pub install: Option<AppFolderDto>,
+    pub data: Vec<AppFolderDto>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppsDto {
+    pub apps: Vec<AppDto>,
+    /// Apps registered with the OS (including those with nothing in this scan).
+    pub registered: usize,
+}
+
+impl AppsDto {
+    pub fn new(tree: &Tree, footprints: &[AppFootprint], registered: usize) -> Self {
+        let folder = |f: &AppFolder| {
+            Some(AppFolderDto {
+                node: NodeDto::new(tree, f.node)?,
+                path: tree.path(f.node)?.to_string_lossy().into_owned(),
+                confidence: f.confidence,
+            })
+        };
+        AppsDto {
+            registered,
+            apps: footprints
+                .iter()
+                .take(MAX_VIEW_ITEMS)
+                .map(|fp| AppDto {
+                    name: fp.app.name.clone(),
+                    publisher: fp.app.publisher.clone(),
+                    version: fp.app.version.clone(),
+                    estimated_size: fp.app.estimated_size,
+                    total: fp.total,
+                    install: fp.install.as_ref().and_then(folder),
+                    data: fp.data.iter().filter_map(folder).collect(),
+                })
+                .collect(),
+        }
+    }
 }

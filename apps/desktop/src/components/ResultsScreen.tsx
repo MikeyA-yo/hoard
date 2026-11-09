@@ -9,6 +9,9 @@ import { TrayPanel } from "./TrayPanel";
 import { SuggestionsView } from "./SuggestionsView";
 import { ProjectsView } from "./ProjectsView";
 import { FileTypesView } from "./FileTypesView";
+import { DuplicatesView } from "./DuplicatesView";
+import { AppsView } from "./AppsView";
+import { HistoryView, GrowthBanner } from "./HistoryView";
 
 const TABS: { key: SideTab; label: string }[] = [
   { key: "contents", label: "Contents" },
@@ -123,6 +126,15 @@ export function ResultsScreen() {
           <button className={mainView === "types" ? "on" : ""} onClick={() => setMainView("types")}>
             File types
           </button>
+          <button className={mainView === "duplicates" ? "on" : ""} onClick={() => setMainView("duplicates")}>
+            Duplicates
+          </button>
+          <button className={mainView === "apps" ? "on" : ""} onClick={() => setMainView("apps")}>
+            Apps
+          </button>
+          <button className={mainView === "history" ? "on" : ""} onClick={() => setMainView("history")}>
+            History
+          </button>
         </div>
         <div className="segmented" role="group" aria-label="Size mode">
           <button className={mode === "allocated" ? "on" : ""} onClick={() => setMode("allocated")} title="Space actually used on disk">
@@ -169,11 +181,15 @@ export function ResultsScreen() {
         {detail && <span className="crumb-size">{formatBytes(sizeOf(detail.node, mode))}</span>}
       </nav>
 
+      <GrowthBanner />
       <main className="workspace">
         {mainView === "map" && <TreemapView />}
         {mainView === "suggestions" && <SuggestionsView />}
         {mainView === "projects" && <ProjectsView />}
         {mainView === "types" && <FileTypesView />}
+        {mainView === "duplicates" && <DuplicatesView />}
+        {mainView === "apps" && <AppsView />}
+        {mainView === "history" && <HistoryView />}
         <aside className="side">
           <div className="tabs" role="tablist">
             {TABS.map((t) => (

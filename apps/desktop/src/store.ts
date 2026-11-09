@@ -5,6 +5,8 @@ import type {
   CleanupMode,
   CleanupProgress,
   CleanupReport,
+  DupesProgress,
+  DupesSummary,
   Suggestions,
   Tray,
   TrashSize,
@@ -22,7 +24,13 @@ import type {
 } from "./types";
 
 export type Screen = "home" | "scanning" | "results";
-export type MainView = "map" | "suggestions" | "projects" | "types";
+export type MainView = "map" | "suggestions" | "projects" | "types" | "duplicates" | "apps" | "history";
+
+/** A duplicate search. `runId` is generated here before the backend is called. */
+export type DupesRun =
+  | { runId: string; status: "running"; progress: DupesProgress | null }
+  | { runId: string; status: "done"; summary: DupesSummary }
+  | { runId: string; status: "error"; error: string };
 export type SideTab = "contents" | "files" | "dirs" | "errors" | "tray";
 
 /** A cleanup run. `runId` is generated here before the backend is called. */
@@ -76,6 +84,9 @@ interface HoardState {
   suggestions: Suggestions | null;
   suggestionsLoading: boolean;
   trashSize: TrashSize | null;
+  dupesRun: DupesRun | null;
+  /** Bumped whenever duplicate results may have changed. */
+  dupesVersion: number;
 
   loadTargets: () => Promise<void>;
   startScan: (path: string, opts?: ScanOpts) => Promise<void>;
@@ -112,6 +123,10 @@ interface HoardState {
   loadSuggestions: () => Promise<void>;
   addSuggestions: (ruleId: string | null) => Promise<void>;
   loadTrashSize: () => Promise<void>;
+  findDuplicates: (minSize: number) => Promise<void>;
+  cancelDuplicates: () => Promise<void>;
+  onDupesProgress: (p: DupesProgress) => void;
+  keepOneCopy: (keep: number, remove: number[]) => Promise<void>;
 }
 
 /** True if `next` should replace `cur`: a newer scan, or a newer version of the same scan's tray. */
@@ -161,6 +176,8 @@ export const useHoard = create<HoardState>()((set, get) => ({
   suggestions: null,
   suggestionsLoading: false,
   trashSize: null,
+  dupesRun: null,
+  dupesVersion: 0,
 
   loadTargets: async () => {
     try {
@@ -226,6 +243,8 @@ export const useHoard = create<HoardState>()((set, get) => ({
       // Show sizes the way the scan was asked for; the toggle can change it.
       mode: d.summary.sizeMode,
       suggestions: null,
+      dupesRun: null,
+      dupesVersion: get().dupesVersion + 1,
     });
     if (get().mainView === "suggestions") void get().loadSuggestions();
     void get().loadTrashSize();
@@ -368,6 +387,7 @@ export const useHoard = create<HoardState>()((set, get) => ({
       await get().refreshTray();
       if (get().suggestions) void get().loadSuggestions();
       void get().loadTrashSize();
+      set({ dupesVersion: get().dupesVersion + 1 });
       const cur = get().currentId;
       if (cur !== null) {
         const d = await api.getNode(cur);
@@ -408,6 +428,42 @@ export const useHoard = create<HoardState>()((set, get) => ({
       if (token === suggestionsToken) get().showToast(errorMessage(e));
     } finally {
       if (token === suggestionsToken) set({ suggestionsLoading: false });
+    }
+  },
+
+  findDuplicates: async (minSize) => {
+    if (get().dupesRun?.status === "running") return;
+    const runId = newRunId();
+    set({ dupesRun: { runId, status: "running", progress: null } });
+    try {
+      const summary = await api.findDuplicates(runId, minSize);
+      if (get().dupesRun?.runId === runId) {
+        set({ dupesRun: { runId, status: "done", summary }, dupesVersion: get().dupesVersion + 1 });
+      }
+    } catch (e) {
+      if (get().dupesRun?.runId === runId) set({ dupesRun: { runId, status: "error", error: errorMessage(e) } });
+    }
+  },
+
+  cancelDuplicates: async () => {
+    const run = get().dupesRun;
+    if (run?.status === "running") await api.cancelDuplicates(run.runId);
+  },
+
+  onDupesProgress: (p) => {
+    const run = get().dupesRun;
+    if (run?.status === "running" && run.runId === p.runId) set({ dupesRun: { ...run, progress: p } });
+  },
+
+  keepOneCopy: async (keep, remove) => {
+    const before = get().tray?.count ?? 0;
+    try {
+      const t = await api.trayAddDuplicates(keep, remove);
+      get().applyTray(t);
+      const added = t.count - before;
+      get().showToast(added > 0 ? `Added ${added} extra cop${added === 1 ? "y" : "ies"} to the Cleanup Tray` : (t.notes[0] ?? "Nothing added"));
+    } catch (e) {
+      get().showToast(errorMessage(e));
     }
   },
 

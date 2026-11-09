@@ -22,6 +22,7 @@ pub mod protected;
 mod remove;
 mod tray;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::io;
 use std::path::PathBuf;
@@ -74,6 +75,9 @@ pub struct CleanupContext {
     pub log_path: PathBuf,
     /// Protected locations.
     pub protected: ProtectedList,
+    /// Duplicate removals: item -> the copy the user chose to keep. Such an
+    /// item is only removed if its kept copy is intact and not in the run.
+    pub keepers: HashMap<NodeId, NodeId>,
 }
 
 impl CleanupContext {
@@ -83,6 +87,7 @@ impl CleanupContext {
             scan_root,
             log_path,
             protected: ProtectedList::system(),
+            keepers: HashMap::new(),
         }
     }
 
@@ -166,6 +171,13 @@ pub enum SkipReason {
     Cancelled,
     /// The action log stopped accepting writes; the run halted.
     LogUnavailable,
+    /// A duplicate whose kept copy is also being removed in this run.
+    KeeperInRun,
+    /// A duplicate whose kept copy changed or vanished since the scan.
+    KeeperChanged {
+        /// What changed.
+        why: String,
+    },
 }
 
 impl fmt::Display for SkipReason {
@@ -185,6 +197,13 @@ impl fmt::Display for SkipReason {
             SkipReason::Cancelled => write!(f, "cleanup was cancelled"),
             SkipReason::LogUnavailable => {
                 write!(f, "the action log could not be written, so cleanup stopped")
+            }
+            SkipReason::KeeperInRun => write!(
+                f,
+                "the copy you chose to keep is also being removed, so this copy stays"
+            ),
+            SkipReason::KeeperChanged { why } => {
+                write!(f, "the copy you chose to keep {why}, so this copy stays")
             }
         }
     }
@@ -384,6 +403,9 @@ pub fn validate(
             why: "its type changed".into(),
         });
     }
+    if let Some(why) = file_modified(node, &now) {
+        return Err(SkipReason::Changed { why });
+    }
 
     // The parent (not the item, which may be a link) must still resolve to
     // a location inside the scan root.
@@ -405,6 +427,42 @@ pub fn validate(
         dev: node.dev,
         ino: node.ino,
     })
+}
+
+/// For files: has the content visibly changed since the scan? Hard-link
+/// duplicates were recorded with size 0, so only their mtime is compared.
+fn file_modified(node: &crate::tree::Node, now: &platform::EntryMeta) -> Option<String> {
+    if node.kind != NodeKind::File {
+        return None;
+    }
+    let size_changed =
+        !node.flags.contains(NodeFlags::HARDLINK_DUP) && now.size_apparent != node.size_apparent;
+    (size_changed || now.mtime != node.mtime).then(|| "it was modified after the scan".to_string())
+}
+
+/// Checks the kept copy of a duplicate: still in the tree, same file on
+/// disk, unchanged since the scan.
+fn check_keeper(tree: &Tree, keeper: NodeId) -> Result<(), String> {
+    let gone = || "no longer exists".to_string();
+    let node = tree.get(keeper).ok_or_else(gone)?;
+    if node.flags.contains(NodeFlags::REMOVED) {
+        return Err(gone());
+    }
+    let path = tree.path(keeper).ok_or_else(gone)?;
+    let now = platform::stat(&path).map_err(|e| {
+        if e.kind() == io::ErrorKind::NotFound {
+            gone()
+        } else {
+            format!("can no longer be read ({e})")
+        }
+    })?;
+    if now.dev != node.dev || now.ino != node.ino || now.kind != node.kind {
+        return Err("was replaced by a different file".into());
+    }
+    if file_modified(node, &now).is_some() {
+        return Err("was modified after the scan".into());
+    }
+    Ok(())
 }
 
 fn execute(item: &ValidatedItem, mode: CleanupMode, remover: &dyn Remover) -> ItemOutcome {
@@ -556,7 +614,17 @@ pub fn run_cleanup(
         } else {
             let validated = {
                 let t = tree.read().map_err(|_| CleanupError::Lock)?;
-                validate(&t, id, ctx)
+                match ctx.keepers.get(&id) {
+                    // A duplicate: never remove it unless its kept copy is
+                    // safe and stays.
+                    Some(&keeper) if ids.iter().any(|&o| t.is_ancestor_or_self(o, keeper)) => {
+                        Err(SkipReason::KeeperInRun)
+                    }
+                    Some(&keeper) => check_keeper(&t, keeper)
+                        .map_err(|why| SkipReason::KeeperChanged { why })
+                        .and_then(|()| validate(&t, id, ctx)),
+                    None => validate(&t, id, ctx),
+                }
             };
             match validated {
                 Err(reason) => ItemOutcome::Skipped(reason),
