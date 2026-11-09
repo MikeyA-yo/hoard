@@ -15,12 +15,15 @@
 
 #![warn(missing_docs)]
 
+pub mod classify;
+pub mod disks;
 pub mod error;
 pub mod format;
 pub mod platform;
 pub mod scan;
 pub mod size;
 pub mod tree;
+pub mod view;
 
 pub use error::{HoardError, Result};
 pub use scan::{scan, ScanError, ScanErrorKind, ScanEvent, ScanOptions, TopLevelEntry};

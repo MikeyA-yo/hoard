@@ -1,0 +1,38 @@
+[package]
+name = "hoard-desktop"
+description = "Hoard desktop app (Tauri shell: commands and state only)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "hoard_desktop_lib"
+# Desktop only: no staticlib/cdylib (mobile targets), which also avoids the
+# GNU ld DLL export limit on windows-gnu.
+crate-type = ["rlib"]
+# Test executables on Windows lack the app manifest (common controls v6) and
+# die at load with STATUS_ENTRYPOINT_NOT_FOUND. This crate is a thin shell
+# with no logic of its own; everything is tested in hoard-core.
+test = false
+doctest = false
+
+[[bin]]
+name = "hoard-desktop"
+path = "src/main.rs"
+test = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+anyhow = "1.0.104"
+crossbeam-channel = "0.5.17"
+hoard-core = { version = "0.1.0", path = "../../../crates/hoard-core" }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
