@@ -331,3 +331,146 @@ fn long_paths_are_scanned() {
     assert!(tree.errors().is_empty(), "{:?}", tree.errors());
     assert_eq!(tree.total(SizeMode::Apparent), 12_345);
 }
+
+/// The per-directory fast path must describe every kind of entry exactly as
+/// the plain per-path `stat` does: same kind, sizes, times, identity and link
+/// count, and links described, never followed.
+#[test]
+fn dir_stat_matches_stat() {
+    use hoard_core::platform::{self, DirStat};
+
+    let fx = Fixture::new();
+    fx.file("d/small.bin", 1);
+    fx.file("d/big.bin", 300_000);
+    fx.file("d/empty", 0);
+    fx.dir("d/sub/inner");
+    fx.file("d/sub/inner/x.bin", 5_000);
+    fx.file("d/linked.bin", 70_000);
+    fx.hardlink("d/linked.bin", "d/linked2.bin");
+    fx.file("outside/payload.bin", 2_000_000);
+    fx.dir_link(&fx.path("outside"), "d/dirlink");
+    fx.file_symlink(&fx.path("outside/payload.bin"), "d/filelink");
+    fx.file("d/unicode \u{e9}\u{4e2d}.txt", 10);
+    #[cfg(windows)]
+    {
+        // Always cover a junction too (dir_link prefers a real symlink).
+        let status = std::process::Command::new("cmd")
+            .args(["/C", "mklink", "/J"])
+            .arg(fx.path("d/junction"))
+            .arg(fx.path("outside"))
+            .stdout(std::process::Stdio::null())
+            .status()
+            .expect("run mklink");
+        assert!(status.success());
+        // A compressed file takes the fallback for its allocated size.
+        fx.file("d/compressed.txt", 200_000);
+        let _ = std::process::Command::new("compact")
+            .args(["/c", "/q"])
+            .arg(fx.path("d/compressed.txt"))
+            .stdout(std::process::Stdio::null())
+            .status();
+    }
+
+    let dir = fx.path("d");
+    let ds = DirStat::open(&dir);
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("list") {
+        let entry = entry.expect("entry");
+        let path = entry.path();
+        let fast = ds.stat(&entry.file_name(), &path).expect("fast stat");
+        let slow = platform::stat(&path).expect("stat");
+        assert_eq!(fast, slow, "{}", path.display());
+        checked += 1;
+    }
+    assert!(checked >= 9, "only {checked} entries checked");
+    // The comparison above must have exercised the fast path, not only its
+    // fallback (NTFS temp dirs support it on every supported Windows).
+    #[cfg(windows)]
+    assert!(ds.is_fast());
+
+    let linked = ds
+        .stat("linked.bin".as_ref(), &fx.path("d/linked.bin"))
+        .expect("stat");
+    assert_eq!(linked.nlink, 2);
+    let link = ds
+        .stat("dirlink".as_ref(), &fx.path("d/dirlink"))
+        .expect("stat");
+    assert_eq!(link.kind, NodeKind::Symlink);
+    #[cfg(windows)]
+    {
+        let j = ds
+            .stat("junction".as_ref(), &fx.path("d/junction"))
+            .expect("stat");
+        assert_eq!(j.kind, NodeKind::Symlink);
+    }
+}
+
+/// A directory that cannot be opened still stats its entries (by full path),
+/// and missing entries report errors rather than inventing data.
+#[test]
+fn dir_stat_falls_back() {
+    use hoard_core::platform::{self, DirStat};
+
+    let fx = Fixture::new();
+    fx.file("a.bin", 4_000);
+    let gone = DirStat::open(&fx.path("no-such-dir"));
+    assert!(!gone.is_fast());
+    let meta = gone
+        .stat("a.bin".as_ref(), &fx.path("a.bin"))
+        .expect("fallback");
+    assert_eq!(meta, platform::stat(&fx.path("a.bin")).expect("stat"));
+
+    let ds = DirStat::open(fx.root());
+    assert!(ds.stat("missing".as_ref(), &fx.path("missing")).is_err());
+}
+
+/// A large directory has a non-resident index with its own allocation. The
+/// scan must count it exactly as a per-entry `stat` does, also on Windows
+/// where the fast path takes it from the listing of the directory itself.
+#[test]
+fn scan_totals_match_per_entry_stat() {
+    use hoard_core::platform::{self, DirStat};
+
+    let fx = Fixture::new();
+    for i in 0..1500 {
+        fx.file(
+            &format!("big/a-rather-long-file-name-number-{i:05}.txt"),
+            10,
+        );
+    }
+    fx.file("big/nested/x.bin", 50_000);
+    fx.file("small/y.bin", 7_000);
+
+    let big = platform::stat(&fx.path("big")).expect("stat");
+    if cfg!(windows) {
+        assert!(big.size_allocated > 0, "index should be non-resident");
+    }
+    assert_eq!(
+        DirStat::open(&fx.path("big"))
+            .own_allocated()
+            .unwrap_or(big.size_allocated),
+        big.size_allocated
+    );
+
+    let mut expected = 0u64;
+    let mut stack = vec![fx.root().to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for e in std::fs::read_dir(&dir).expect("list") {
+            let p = e.expect("entry").path();
+            let m = platform::stat(&p).expect("stat");
+            expected += m.size_allocated;
+            if m.kind == NodeKind::Dir {
+                stack.push(p);
+            }
+        }
+    }
+    expected += platform::stat(fx.root()).expect("stat").size_allocated;
+
+    let tree = scan_default(fx.root());
+    assert_eq!(
+        tree.get(tree.root()).expect("root").size_allocated,
+        expected
+    );
+    let big_id = find(&tree, "big").expect("big");
+    assert!(tree.get(big_id).expect("big").size_allocated >= big.size_allocated + 1500 * 10);
+}

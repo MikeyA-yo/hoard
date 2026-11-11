@@ -32,3 +32,24 @@ pub(super) fn stat(path: &Path) -> io::Result<EntryMeta> {
         nlink: md.nlink(),
     })
 }
+
+/// Per-directory stat state. On Unix every entry is `lstat`ed by full path.
+pub(super) struct DirStat;
+
+impl DirStat {
+    pub(super) fn open(_dir: &Path) -> Self {
+        DirStat
+    }
+
+    pub(super) fn stat(&self, _name: &std::ffi::OsStr, path: &Path) -> io::Result<EntryMeta> {
+        stat(path)
+    }
+
+    pub(super) fn own_allocated(&self) -> Option<u64> {
+        None
+    }
+
+    pub(super) fn is_fast(&self) -> bool {
+        false
+    }
+}

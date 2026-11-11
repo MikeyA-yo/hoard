@@ -11,6 +11,13 @@ rust-version = "1.90"
 [profile.release]
 lto = "thin"
 codegen-units = 1
+strip = true
+
+# Dependencies keep only line tables in dev builds: backtraces still work,
+# but debug binaries and rlibs shrink a lot (the windows-gnu toolchain stores
+# DWARF inside the .exe). Our own crates keep full debug info.
+[profile.dev.package."*"]
+debug = "line-tables-only"
 
 [profile.bench]
 debug = true

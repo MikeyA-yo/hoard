@@ -490,6 +490,16 @@ impl TreeBuilder {
         }
     }
 
+    /// Replaces a directory's own allocated size (its index, not its
+    /// contents) and returns the previous value. Used when the size is only
+    /// known once the directory itself has been opened for listing.
+    pub(crate) fn set_own_allocated(&mut self, id: NodeId, size: u64) -> u64 {
+        match self.nodes.get_mut(id.index()) {
+            Some(n) if n.kind == NodeKind::Dir => std::mem::replace(&mut n.size_allocated, size),
+            _ => 0,
+        }
+    }
+
     /// Own (non-aggregated) sizes of a node.
     pub(crate) fn own_sizes(&self, id: NodeId) -> (u64, u64) {
         self.nodes

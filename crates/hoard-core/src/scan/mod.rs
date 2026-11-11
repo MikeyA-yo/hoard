@@ -1,8 +1,8 @@
 //! Parallel directory walk producing a [`Tree`].
 //!
 //! The walk uses `jwalk` (rayon). Every directory listing is post-processed on
-//! a worker thread (`process_read_dir`), where each entry is stat'ed without
-//! following symlinks and descent is pruned for links, other filesystems,
+//! a worker thread (`process_read_dir`), where each entry is stat'ed (via
+//! [`platform::DirStat`], one per directory) without following symlinks and descent is pruned for links, other filesystems,
 //! skipped paths and cancellation. The calling thread consumes entries in
 //! depth-first order and appends them to the arena.
 //!
@@ -78,6 +78,9 @@ struct EntryState {
     flags: NodeFlags,
     /// Drop this entry from the tree (pseudo filesystem).
     excluded: bool,
+    /// The own allocated size of the directory being listed, carried by its
+    /// first child (see [`platform::DirStat::own_allocated`]).
+    parent_alloc: Option<u64>,
 }
 
 type Client = ((), EntryState);
@@ -94,11 +97,20 @@ struct WalkContext {
 }
 
 impl WalkContext {
-    fn process(&self, children: &mut Vec<jwalk::Result<jwalk::DirEntry<Client>>>, is_root: bool) {
+    fn process(
+        &self,
+        dir: &Path,
+        children: &mut Vec<jwalk::Result<jwalk::DirEntry<Client>>>,
+        is_root: bool,
+    ) {
         if self.cancel.load(Ordering::Relaxed) {
             children.clear();
             return;
         }
+        if children.is_empty() {
+            return;
+        }
+        let dir_stat = platform::DirStat::open(dir);
         let mut drop_any = false;
         for child in children.iter_mut() {
             let Ok(entry) = child else { continue };
@@ -109,7 +121,7 @@ impl WalkContext {
                 drop_any = true;
                 continue;
             }
-            match platform::stat(&path) {
+            match dir_stat.stat(&entry.file_name, &path) {
                 Ok(meta) => {
                     if meta.kind != NodeKind::Dir {
                         // Never descend into anything but a real directory.
@@ -134,6 +146,11 @@ impl WalkContext {
         }
         if drop_any {
             children.retain(|c| !matches!(c, Ok(e) if e.client_state.excluded));
+        }
+        if let Some(size) = dir_stat.own_allocated() {
+            if let Some(Ok(first)) = children.iter_mut().find(|c| c.is_ok()) {
+                first.client_state.parent_alloc = Some(size);
+            }
         }
     }
 }
@@ -208,8 +225,8 @@ pub fn scan(
         .follow_links(false)
         .sort(false)
         .parallelism(Parallelism::RayonNewPool(threads))
-        .process_read_dir(move |depth, _path, _state, children| {
-            ctx.process(children, depth.is_none());
+        .process_read_dir(move |depth, path, _state, children| {
+            ctx.process(path, children, depth.is_none());
         });
 
     let mut state = WalkState::new(size_mode, progress, started);
@@ -239,6 +256,10 @@ pub fn scan(
                         // Depth-first order guarantees a parent; skip defensively.
                         continue;
                     };
+                    if let Some(size) = entry.client_state.parent_alloc.take() {
+                        let before = builder.set_own_allocated(parent, size);
+                        state.adjust_dir_alloc(depth - 1, before, size);
+                    }
                     let (meta, flags) = match entry.client_state.meta.take() {
                         Some(Ok(m)) => (m, entry.client_state.flags),
                         Some(Err(message)) => {
@@ -406,6 +427,19 @@ impl WalkState {
                 t.size_allocated += alloc;
                 t.size_apparent += apparent;
                 t.file_count += u64::from(!is_dir);
+            }
+        }
+    }
+
+    /// Accounts for a directory's own allocated size changing from `before`
+    /// to `after` after it was recorded (`depth` is the directory's depth).
+    fn adjust_dir_alloc(&mut self, depth: usize, before: u64, after: u64) {
+        if self.size_mode == SizeMode::Allocated {
+            self.bytes = (self.bytes + after).saturating_sub(before);
+        }
+        if depth >= 1 {
+            if let Some(t) = self.top.last_mut() {
+                t.size_allocated = (t.size_allocated + after).saturating_sub(before);
             }
         }
     }

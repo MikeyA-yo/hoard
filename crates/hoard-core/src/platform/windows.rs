@@ -6,20 +6,30 @@
 //! `FILE_READ_ATTRIBUTES` access (does not hydrate cloud placeholders or
 //! conflict with other processes' share modes).
 
-use std::ffi::c_void;
+use std::cell::Cell;
+use std::ffi::{c_void, OsStr};
 use std::io;
 use std::os::windows::ffi::OsStrExt;
 use std::path::Path;
 
-use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, ERROR_SHARING_VIOLATION, FILETIME, HANDLE};
+use windows::core::{PCWSTR, PWSTR};
+use windows::Wdk::Foundation::OBJECT_ATTRIBUTES;
+use windows::Wdk::Storage::FileSystem::{
+    FileStatInformation, FILE_INFORMATION_CLASS, FILE_STAT_INFORMATION,
+};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_SHARING_VIOLATION, FILETIME, HANDLE, NTSTATUS, STATUS_INVALID_INFO_CLASS,
+    STATUS_INVALID_PARAMETER, STATUS_NOT_IMPLEMENTED, STATUS_NOT_SUPPORTED, UNICODE_STRING,
+};
 use windows::Win32::Storage::FileSystem::{
     CreateFileW, FileAttributeTagInfo, FileStandardInfo, GetFileInformationByHandle,
-    GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_DIRECTORY,
-    FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS,
-    FILE_FLAG_OPEN_REPARSE_POINT, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
+    GetFileInformationByHandleEx, BY_HANDLE_FILE_INFORMATION, FILE_ATTRIBUTE_COMPRESSED,
+    FILE_ATTRIBUTE_DIRECTORY, FILE_ATTRIBUTE_REPARSE_POINT, FILE_ATTRIBUTE_SPARSE_FILE,
+    FILE_ATTRIBUTE_TAG_INFO, FILE_FLAG_BACKUP_SEMANTICS, FILE_FLAG_OPEN_REPARSE_POINT,
+    FILE_LIST_DIRECTORY, FILE_READ_ATTRIBUTES, FILE_SHARE_DELETE, FILE_SHARE_READ,
     FILE_SHARE_WRITE, FILE_STANDARD_INFO, OPEN_EXISTING,
 };
+use windows::Win32::System::IO::IO_STATUS_BLOCK;
 
 use super::EntryMeta;
 use crate::size;
@@ -120,6 +130,233 @@ pub(super) fn stat(path: &Path) -> io::Result<EntryMeta> {
     })
 }
 
+/// Signature of `ntdll!NtQueryInformationByName` (Windows 10 1709+).
+type QueryByNameFn = unsafe extern "system" fn(
+    *const OBJECT_ATTRIBUTES,
+    *mut IO_STATUS_BLOCK,
+    *mut c_void,
+    u32,
+    FILE_INFORMATION_CLASS,
+) -> NTSTATUS;
+
+/// `NtQueryInformationByName`, looked up at runtime so Hoard still starts on
+/// systems without it (it then uses [`stat`] for every entry).
+fn query_by_name_fn() -> Option<QueryByNameFn> {
+    use std::sync::OnceLock;
+    use windows::core::{s, w};
+    use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress};
+
+    static FUNC: OnceLock<Option<QueryByNameFn>> = OnceLock::new();
+    *FUNC.get_or_init(|| {
+        // SAFETY: ntdll.dll is mapped into every Windows process; both names
+        // are static NUL-terminated strings.
+        let proc = unsafe {
+            let ntdll = GetModuleHandleW(w!("ntdll.dll")).ok()?;
+            GetProcAddress(ntdll, s!("NtQueryInformationByName"))?
+        };
+        // SAFETY: the exported function has exactly the documented signature
+        // declared by `QueryByNameFn`.
+        Some(unsafe {
+            std::mem::transmute::<unsafe extern "system" fn() -> isize, QueryByNameFn>(proc)
+        })
+    })
+}
+
+/// Per-directory stat state: an open handle on the directory, used as the
+/// root for `NtQueryInformationByName(FileStatInformation)` on each entry.
+///
+/// That one call returns everything [`stat`] gathers with an open plus three
+/// queries (file id, link count, sizes, attributes, reparse tag), and it
+/// describes reparse points themselves, never their targets. Measured about
+/// 4x faster than [`stat`] per entry, with identical results.
+///
+/// One difference: the query reports 0 for a directory's own allocation (its
+/// index). [`DirStat::own_allocated`] supplies that value once the scanner
+/// opens the directory itself to list it, so no extra open is needed.
+///
+/// Anything unusual falls back to [`stat`] on the full path: no handle, the
+/// call missing or unsupported by the filesystem, an error (so error
+/// messages stay the same), or a compressed / sparse file (whose allocated
+/// size needs `GetCompressedFileSizeW`).
+pub(super) struct DirStat {
+    /// Directory handle, volume serial and the query function, or `None` to
+    /// always fall back.
+    fast: Option<(OwnedHandle, u64, QueryByNameFn)>,
+    /// The directory's own allocated size, computed exactly as [`stat`]
+    /// does, when the fast path is open.
+    own_alloc: Option<u64>,
+    /// Cleared after the filesystem rejects the information class, so the
+    /// rest of the directory goes straight to the fallback.
+    by_name_ok: Cell<bool>,
+}
+
+impl DirStat {
+    pub(super) fn open(dir: &Path) -> Self {
+        match Self::open_fast(dir) {
+            Some((fast, own_alloc)) => DirStat {
+                fast: Some(fast),
+                own_alloc: Some(own_alloc),
+                by_name_ok: Cell::new(true),
+            },
+            None => DirStat {
+                fast: None,
+                own_alloc: None,
+                by_name_ok: Cell::new(false),
+            },
+        }
+    }
+
+    /// Opens the directory and returns the fast-path state plus the
+    /// directory's own allocated size.
+    #[allow(clippy::type_complexity)]
+    fn open_fast(dir: &Path) -> Option<((OwnedHandle, u64, QueryByNameFn), u64)> {
+        let func = query_by_name_fn()?;
+        let wide = to_wide_verbatim(dir);
+        // SAFETY: `wide` is a NUL-terminated UTF-16 buffer that outlives the call.
+        let handle = unsafe {
+            CreateFileW(
+                PCWSTR(wide.as_ptr()),
+                FILE_LIST_DIRECTORY.0,
+                FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+                None,
+                OPEN_EXISTING,
+                FILE_FLAG_OPEN_REPARSE_POINT | FILE_FLAG_BACKUP_SEMANTICS,
+                None,
+            )
+        }
+        .ok()?;
+        let handle = OwnedHandle(handle);
+        let mut info = BY_HANDLE_FILE_INFORMATION::default();
+        // SAFETY: valid handle, `info` is a correctly sized out parameter.
+        unsafe { GetFileInformationByHandle(handle.0, &mut info) }.ok()?;
+        // Only a real directory may be a root for relative names. The
+        // scanner never descends into links, but a folder can be swapped for
+        // a junction between listing and here.
+        let attrs = info.dwFileAttributes;
+        if attrs & FILE_ATTRIBUTE_DIRECTORY.0 == 0 || attrs & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0 {
+            return None;
+        }
+        let mut std_info = FILE_STANDARD_INFO::default();
+        // SAFETY: valid handle, buffer and size match FILE_STANDARD_INFO.
+        unsafe {
+            GetFileInformationByHandleEx(
+                handle.0,
+                FileStandardInfo,
+                (&mut std_info as *mut FILE_STANDARD_INFO).cast::<c_void>(),
+                size_of::<FILE_STANDARD_INFO>() as u32,
+            )
+        }
+        .ok()?;
+        // Same computation as `stat` uses for a directory.
+        let own_alloc = size::allocated_windows(std_info.AllocationSize, attrs, &wide);
+        Some((
+            (handle, u64::from(info.dwVolumeSerialNumber), func),
+            own_alloc,
+        ))
+    }
+
+    pub(super) fn own_allocated(&self) -> Option<u64> {
+        self.own_alloc
+    }
+
+    pub(super) fn is_fast(&self) -> bool {
+        self.fast.is_some() && self.by_name_ok.get()
+    }
+
+    pub(super) fn stat(&self, name: &OsStr, path: &Path) -> io::Result<EntryMeta> {
+        match self.stat_fast(name) {
+            Some(meta) => Ok(meta),
+            None => stat(path),
+        }
+    }
+
+    fn stat_fast(&self, name: &OsStr) -> Option<EntryMeta> {
+        let (dir, dev, func) = self.fast.as_ref()?;
+        if !self.by_name_ok.get() {
+            return None;
+        }
+        let wide: Vec<u16> = name.encode_wide().collect();
+        // Never let a separator turn the relative name into a path.
+        if wide.is_empty()
+            || wide
+                .iter()
+                .any(|&c| c == u16::from(b'\\') || c == u16::from(b'/'))
+        {
+            return None;
+        }
+        let bytes = u16::try_from(wide.len() * 2).ok()?;
+        let object_name = UNICODE_STRING {
+            Length: bytes,
+            MaximumLength: bytes,
+            Buffer: PWSTR(wide.as_ptr().cast_mut()),
+        };
+        let attributes = OBJECT_ATTRIBUTES {
+            Length: size_of::<OBJECT_ATTRIBUTES>() as u32,
+            RootDirectory: dir.0,
+            ObjectName: &object_name,
+            ..Default::default()
+        };
+        let mut iosb = IO_STATUS_BLOCK::default();
+        let mut info = FILE_STAT_INFORMATION::default();
+        // SAFETY: all pointers refer to live locals of the right types (the
+        // name buffer is only read), the size matches the output buffer, and
+        // `func` is NtQueryInformationByName (see `query_by_name_fn`).
+        let status = unsafe {
+            func(
+                &attributes,
+                &mut iosb,
+                (&mut info as *mut FILE_STAT_INFORMATION).cast::<c_void>(),
+                size_of::<FILE_STAT_INFORMATION>() as u32,
+                FileStatInformation,
+            )
+        };
+        if status.is_err() {
+            if matches!(
+                status,
+                STATUS_INVALID_INFO_CLASS
+                    | STATUS_NOT_IMPLEMENTED
+                    | STATUS_NOT_SUPPORTED
+                    | STATUS_INVALID_PARAMETER
+            ) {
+                self.by_name_ok.set(false);
+            }
+            return None;
+        }
+        let attrs = info.FileAttributes;
+        if attrs & (FILE_ATTRIBUTE_COMPRESSED.0 | FILE_ATTRIBUTE_SPARSE_FILE.0) != 0 {
+            return None;
+        }
+        let is_link = attrs & FILE_ATTRIBUTE_REPARSE_POINT.0 != 0
+            && info.ReparseTag & REPARSE_TAG_NAME_SURROGATE != 0;
+        let kind = if is_link {
+            NodeKind::Symlink
+        } else if attrs & FILE_ATTRIBUTE_DIRECTORY.0 != 0 {
+            NodeKind::Dir
+        } else {
+            NodeKind::File
+        };
+        let allocated = u64::try_from(info.AllocationSize).unwrap_or(0);
+        let (size_apparent, size_allocated) = match kind {
+            NodeKind::Symlink => (0, 0),
+            NodeKind::Dir => (0, allocated),
+            NodeKind::File | NodeKind::Other => {
+                (u64::try_from(info.EndOfFile).unwrap_or(0), allocated)
+            }
+        };
+        Some(EntryMeta {
+            kind,
+            size_apparent,
+            size_allocated,
+            mtime: ticks_to_unix(u64::try_from(info.LastWriteTime).unwrap_or(0)),
+            dev: *dev,
+            // The 64-bit NTFS file id, the same value `stat` builds from
+            // nFileIndexHigh/Low (the bits are reinterpreted, not converted).
+            ino: info.FileId as u64,
+            nlink: u64::from(info.NumberOfLinks),
+        })
+    }
+}
+
 /// Converts a `windows` crate error to an `io::Error` carrying the plain
 /// Win32 error code (e.g. 5 for access denied), so messages read
 /// "os error 5" and `raw_os_error` comparisons work. The crate's own `From`
@@ -205,7 +442,11 @@ fn stat_fallback(path: &Path) -> io::Result<EntryMeta> {
 }
 
 fn filetime_to_unix(ft: FILETIME) -> i64 {
-    let ticks = (u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime);
+    ticks_to_unix((u64::from(ft.dwHighDateTime) << 32) | u64::from(ft.dwLowDateTime))
+}
+
+/// Converts 100 ns ticks since 1601 to unix seconds.
+fn ticks_to_unix(ticks: u64) -> i64 {
     // 10,000,000 ticks of 100 ns per second; u64 / 1e7 always fits in i64.
     (ticks / 10_000_000) as i64 - FILETIME_UNIX_OFFSET_SECS
 }

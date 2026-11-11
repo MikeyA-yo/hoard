@@ -43,18 +43,51 @@ rounding (781,447,872 B vs 763,133 KiB).
 | 16 (default, 2x CPUs) | 0.54 to 0.78 s |
 | 48 | 0.77 s |
 
-## Known bottleneck
+## Windows per-directory stat (11 Nov 2026)
 
-On Windows every entry is opened with `CreateFileW` to read its file index,
-volume serial and link count (needed for hardlink dedup and, in M2, for
-cleanup revalidation). That costs about 100 us per entry single-threaded.
+Same machine, Rust 1.99 (windows-gnu). Entries are now queried with
+`NtQueryInformationByName(FileStatInformation)` relative to one open handle
+per directory (`platform::DirStat`), instead of `CreateFileW` +
+`GetFileInformationByHandle(Ex)` + `CloseHandle` per entry. One call returns
+file ID, link count, sizes, attributes and reparse tag. A directory's own
+index allocation is read from the handle the scanner opens to list it, so
+directories need no extra open.
 
-Candidates, in order:
+### `scan/100k_files` (criterion)
 
-1. Enumerate with `GetFileInformationByHandleEx(FileIdExtdDirectoryInfo)` on
-   the directory handle. This returns file ID, sizes, attributes, reparse tag
-   and mtime for a whole directory in one call, with no per-file open. It does
-   not return the link count, so hardlink dedup would need either a per-volume
-   file ID set (memory cost) or a targeted open only where hardlinks are
-   likely.
-2. NTFS MFT fast path when elevated (PRD S10, P2).
+| Metric | Before | After |
+|--------|--------|-------|
+| Time per scan | 1.71 s | 0.79 s (range 0.77 to 0.82 s) |
+| Throughput | 58.5k files/s | 127k files/s |
+
+### Real trees (release CLI, warm, old and new alternated)
+
+| Tree | Entries | Before | After | Speedup |
+|------|---------|--------|-------|---------|
+| `~/.cargo` | 44k | 2.2 s | 1.4 s | 1.6x |
+| `~/.gemini` (many small files) | 48k | 2.8 s | 0.65 s | 4.2x |
+| `~/AppData` | 1.05M | 51 s | 22 s | 2.3x |
+| `~` (home) | 3.48M | 372 s | 342 s | 1.1x |
+
+Totals are byte-identical to the previous scanner on `~/.cargo`, `~/.rustup`,
+`~/go`, `~/Documents` and the pnpm store (an earlier draft undercounted large
+directories, see `scan_totals_match_per_entry_stat`). A probe over 136k
+entries in pnpm trees (67k hardlinked) found no metadata differences at all.
+
+The whole home folder barely improves: its 3.5M file records (about 3.5 GB of
+MFT) do not fit in the file cache next to everything else on this 16 GB
+machine, so every pass is mostly disk reads, which the per-entry query still
+needs. Single-threaded micro-benchmark on `~/.cargo/registry` (44k entries):
+per-entry open 13.0 s, per-directory query 3.2 s, directory enumeration alone
+1.9 s.
+
+## Remaining bottleneck
+
+1. Disk reads of file records on large, cold trees. Directory enumeration
+   (`FileIdExtdDirectoryInfo`) avoids them but has no link count and can
+   carry stale sizes for hardlinked files, so it is not used.
+2. Each directory is opened twice (jwalk's listing and `DirStat`). A custom
+   walker that lists through the same handle would remove one open per
+   directory.
+3. NTFS MFT fast path when elevated (PRD S10, P2): reads all records
+   sequentially, the real fix for whole-drive scans.

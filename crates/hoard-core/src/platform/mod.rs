@@ -3,6 +3,7 @@
 //! Everything outside this module calls the common signatures defined here.
 //! Per-OS code lives in `unix.rs`, `windows.rs`, `linux.rs` and `macos.rs`.
 
+use std::ffi::OsStr;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -49,6 +50,50 @@ pub struct EntryMeta {
 /// described, never its target.
 pub fn stat(path: &Path) -> io::Result<EntryMeta> {
     imp::stat(path)
+}
+
+/// Stats the entries of one directory, reusing per-directory state.
+///
+/// Same contract as [`stat`] (links are described, never followed), but much
+/// cheaper per entry on Windows: entries are queried by name relative to one
+/// open directory handle instead of being opened one by one. Elsewhere it is
+/// a plain [`stat`] of the full path.
+pub struct DirStat {
+    inner: imp::DirStat,
+}
+
+impl DirStat {
+    /// Prepares to stat entries of `dir`. Never fails: if the directory cannot
+    /// be opened, [`DirStat::stat`] falls back to [`stat`] on the full path.
+    pub fn open(dir: &Path) -> Self {
+        DirStat {
+            inner: imp::DirStat::open(dir),
+        }
+    }
+
+    /// Stats the entry `name` of this directory. `path` must be the entry's
+    /// full path (`dir` joined with `name`); it is used for fallbacks.
+    pub fn stat(&self, name: &OsStr, path: &Path) -> io::Result<EntryMeta> {
+        self.inner.stat(name, path)
+    }
+
+    /// The directory's own allocated size (its index), when [`DirStat::stat`]
+    /// on its parent could not report it.
+    ///
+    /// On Windows the per-entry fast path reports 0 for a directory's own
+    /// allocation, so the scanner takes it from here once it lists that
+    /// directory; the value equals [`stat`]'s `size_allocated` for it. `None`
+    /// means the parent's stat already reported it (always the case
+    /// outside Windows).
+    pub fn own_allocated(&self) -> Option<u64> {
+        self.inner.own_allocated()
+    }
+
+    /// Whether the per-directory fast path is (still) in use, for tests and
+    /// diagnostics. Always false outside Windows.
+    pub fn is_fast(&self) -> bool {
+        self.inner.is_fast()
+    }
 }
 
 /// Size of the Recycle Bin / Trash: `(bytes, items)`, or `None` where it
