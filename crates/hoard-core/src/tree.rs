@@ -211,12 +211,33 @@ pub struct Tree {
     errors: Vec<ScanError>,
     complete: bool,
     size_mode: SizeMode,
+    source: ScanSource,
+}
+
+/// How a tree's data was gathered.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScanSource {
+    /// Listing directories and querying each entry (works everywhere).
+    #[default]
+    Walk,
+    /// Reading the NTFS Master File Table directly (Windows, elevated).
+    Mft,
 }
 
 impl Tree {
     /// The root node id.
     pub fn root(&self) -> NodeId {
         self.root
+    }
+
+    /// How the data was gathered.
+    pub fn source(&self) -> ScanSource {
+        self.source
+    }
+
+    pub(crate) fn set_source(&mut self, source: ScanSource) {
+        self.source = source;
     }
 
     /// The absolute path that was scanned.
@@ -530,6 +551,7 @@ impl TreeBuilder {
             errors,
             complete,
             size_mode: self.size_mode,
+            source: ScanSource::Walk,
         }
     }
 }

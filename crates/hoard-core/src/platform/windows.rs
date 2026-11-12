@@ -357,6 +357,104 @@ impl DirStat {
     }
 }
 
+/// A raw volume handle. Volume handles do no caching, so buffers must be
+/// sector-aligned in memory as well as in offset and length; unaligned
+/// buffers go through an aligned bounce buffer.
+struct WinVolume {
+    file: std::fs::File,
+}
+
+impl WinVolume {
+    fn read_exact_at(&self, offset: u64, dst: &mut [u8]) -> io::Result<()> {
+        use std::os::windows::fs::FileExt;
+        let mut done = 0;
+        while done < dst.len() {
+            let n = self
+                .file
+                .seek_read(&mut dst[done..], offset + done as u64)?;
+            if n == 0 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
+            }
+            done += n;
+        }
+        Ok(())
+    }
+}
+
+impl super::VolumeRead for WinVolume {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        if (buf.as_ptr() as usize).is_multiple_of(super::VOLUME_ALIGN) {
+            return self.read_exact_at(offset, buf);
+        }
+        let mut bounce = vec![0u8; buf.len() + super::VOLUME_ALIGN];
+        let start = bounce.as_ptr().align_offset(super::VOLUME_ALIGN);
+        let dst = &mut bounce[start..start + buf.len()];
+        self.read_exact_at(offset, dst)?;
+        buf.copy_from_slice(dst);
+        Ok(())
+    }
+}
+
+/// See [`super::open_raw_volume`].
+pub(super) fn open_raw_volume(path: &Path) -> Option<Box<dyn super::VolumeRead + Send>> {
+    use std::os::windows::io::FromRawHandle;
+    use windows::Win32::Foundation::GENERIC_READ;
+    use windows::Win32::Storage::FileSystem::{
+        GetVolumeInformationW, GetVolumeNameForVolumeMountPointW, GetVolumePathNameW,
+    };
+
+    let mut plain: Vec<u16> = path.as_os_str().encode_wide().collect();
+    plain.push(0);
+    let mut mount = [0u16; 1024];
+    // SAFETY: NUL-terminated input; the output slice length is passed along.
+    unsafe { GetVolumePathNameW(PCWSTR(plain.as_ptr()), &mut mount) }.ok()?;
+    let mut guid = [0u16; 128];
+    // SAFETY: `mount` is NUL-terminated by the previous call; output sized.
+    unsafe { GetVolumeNameForVolumeMountPointW(PCWSTR(mount.as_ptr()), &mut guid) }.ok()?;
+    let mut fs_name = [0u16; 64];
+    // SAFETY: `guid` is a NUL-terminated volume root path.
+    unsafe {
+        GetVolumeInformationW(
+            PCWSTR(guid.as_ptr()),
+            None,
+            None,
+            None,
+            None,
+            Some(&mut fs_name),
+        )
+    }
+    .ok()?;
+    let fs_len = fs_name
+        .iter()
+        .position(|&c| c == 0)
+        .unwrap_or(fs_name.len());
+    if String::from_utf16_lossy(&fs_name[..fs_len]) != "NTFS" {
+        return None;
+    }
+    // The device itself is the volume name without its trailing backslash.
+    let mut device: Vec<u16> = guid.iter().copied().take_while(|&c| c != 0).collect();
+    if device.last() == Some(&u16::from(b'\\')) {
+        device.pop();
+    }
+    device.push(0);
+    // SAFETY: NUL-terminated device path that outlives the call.
+    let handle = unsafe {
+        CreateFileW(
+            PCWSTR(device.as_ptr()),
+            GENERIC_READ.0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+            None,
+            OPEN_EXISTING,
+            Default::default(),
+            None,
+        )
+    }
+    .ok()?;
+    // SAFETY: a valid handle we own; the File takes over closing it.
+    let file = unsafe { std::fs::File::from_raw_handle(handle.0) };
+    Some(Box::new(WinVolume { file }))
+}
+
 /// Converts a `windows` crate error to an `io::Error` carrying the plain
 /// Win32 error code (e.g. 5 for access denied), so messages read
 /// "os error 5" and `raw_os_error` comparisons work. The crate's own `From`

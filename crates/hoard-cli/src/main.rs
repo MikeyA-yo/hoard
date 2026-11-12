@@ -1,5 +1,7 @@
 //! `hoard`: command line front end for `hoard-core`.
 
+mod compare;
+
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
@@ -9,7 +11,9 @@ use std::time::Instant;
 
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand};
-use hoard_core::{format, scan, NodeId, ScanEvent, ScanOptions, SizeMode, SortKey, Tree};
+use hoard_core::{
+    format, scan, MftMode, NodeId, ScanEvent, ScanOptions, ScanSource, SizeMode, SortKey, Tree,
+};
 use serde::Serialize;
 
 #[derive(Parser)]
@@ -25,6 +29,16 @@ enum Command {
     Scan(ScanArgs),
     /// Scan and list reclaimable space found by the built-in rules.
     Suggest(SuggestArgs),
+    /// Diagnostic: scan by walking and from the NTFS MFT, and list every
+    /// difference (Windows, administrator prompt).
+    #[command(hide = true)]
+    CompareMft {
+        /// Folder or drive to compare.
+        path: PathBuf,
+        /// Hide the live progress line.
+        #[arg(long, short)]
+        quiet: bool,
+    },
 }
 
 #[derive(Args)]
@@ -76,6 +90,28 @@ struct ScanArgs {
     /// Hide the live progress line.
     #[arg(long, short)]
     quiet: bool,
+    /// When to read the NTFS Master File Table directly instead of walking
+    /// (Windows, administrator prompt). `auto` uses it for drive roots and
+    /// the home folder or its parents.
+    #[arg(long, value_enum, default_value_t = MftArg::Auto)]
+    mft: MftArg,
+}
+
+#[derive(Clone, Copy, clap::ValueEnum)]
+enum MftArg {
+    Auto,
+    Off,
+    Force,
+}
+
+impl From<MftArg> for MftMode {
+    fn from(a: MftArg) -> Self {
+        match a {
+            MftArg::Auto => MftMode::Auto,
+            MftArg::Off => MftMode::Off,
+            MftArg::Force => MftMode::Force,
+        }
+    }
 }
 
 fn main() -> Result<()> {
@@ -86,6 +122,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Scan(args) => run_scan(args),
         Command::Suggest(args) => run_suggest(args),
+        Command::CompareMft { path, quiet } => compare::run(&path, quiet),
     }
 }
 
@@ -95,6 +132,7 @@ fn run_scan(args: ScanArgs) -> Result<()> {
         apparent: args.apparent,
         skip: args.skip.clone(),
         threads: args.threads,
+        mft: args.mft.into(),
     };
     let mode = if args.apparent {
         SizeMode::Apparent
@@ -293,7 +331,7 @@ fn print_human(tree: &Tree, mode: SizeMode, args: &ScanArgs, secs: f64) {
         SizeMode::Apparent => "apparent",
     };
     println!(
-        "{}  {} {}, {} files, {} folders, {} errors, {:.2}s{}",
+        "{}  {} {}, {} files, {} folders, {} errors, {:.2}s{}{}",
         tree.root_path().display(),
         format::bytes(root.size(mode)),
         mode_label,
@@ -301,6 +339,11 @@ fn print_human(tree: &Tree, mode: SizeMode, args: &ScanArgs, secs: f64) {
         format::count(tree.dir_count() as u64),
         format::count(tree.errors().len() as u64),
         secs,
+        if tree.source() == ScanSource::Mft {
+            "  (read from the NTFS MFT)"
+        } else {
+            ""
+        },
         if tree.is_complete() {
             ""
         } else {
@@ -375,6 +418,7 @@ fn print_level(tree: &Tree, id: NodeId, mode: SizeMode, top: usize, depth: usize
 struct JsonReport {
     root: PathBuf,
     complete: bool,
+    source: ScanSource,
     size_mode: SizeMode,
     elapsed_ms: u128,
     size_allocated: u64,
@@ -421,6 +465,7 @@ impl JsonReport {
         JsonReport {
             root: tree.root_path().to_path_buf(),
             complete: tree.is_complete(),
+            source: tree.source(),
             size_mode: mode,
             elapsed_ms,
             size_allocated: root.map_or(0, |n| n.size_allocated),

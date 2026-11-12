@@ -105,6 +105,9 @@ export function ResultsScreen() {
           <div className="muted summary-line">
             {formatBytes(total)} {mode === "allocated" ? "on disk" : "apparent"} · {formatCount(summary.files)} files ·{" "}
             {formatCount(summary.dirs)} folders · scanned in {formatDuration(summary.elapsedMs)}
+            {summary.source === "mft" && (
+              <span title="Read directly from the NTFS file table (running as administrator)"> · NTFS fast scan</span>
+            )}
             {summary.errorCount > 0 && (
               <button className="link warn" onClick={() => setSideTab("errors")}>
                 {formatCount(summary.errorCount)} unreadable

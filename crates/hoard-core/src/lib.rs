@@ -32,6 +32,6 @@ pub mod tree;
 pub mod view;
 
 pub use error::{HoardError, Result};
-pub use scan::{scan, ScanError, ScanErrorKind, ScanEvent, ScanOptions, TopLevelEntry};
+pub use scan::{scan, MftMode, ScanError, ScanErrorKind, ScanEvent, ScanOptions, TopLevelEntry};
 pub use size::SizeMode;
-pub use tree::{LargestKind, Node, NodeFlags, NodeId, NodeKind, SortKey, Tree};
+pub use tree::{LargestKind, Node, NodeFlags, NodeId, NodeKind, ScanSource, SortKey, Tree};

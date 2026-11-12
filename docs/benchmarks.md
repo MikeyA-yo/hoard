@@ -89,5 +89,42 @@ per-entry open 13.0 s, per-directory query 3.2 s, directory enumeration alone
 2. Each directory is opened twice (jwalk's listing and `DirStat`). A custom
    walker that lists through the same handle would remove one open per
    directory.
-3. NTFS MFT fast path when elevated (PRD S10, P2): reads all records
-   sequentially, the real fix for whole-drive scans.
+3. NTFS MFT fast path when elevated (PRD S10, P2): done, see below.
+
+## NTFS MFT fast path (12 Nov 2026)
+
+Elevated scans of a drive root, or the home folder and its parents, read the
+Master File Table from the raw volume (`scan/mft`) instead of walking. Reader
+threads fetch chunks of the table, rayon parses each chunk's records in
+parallel, and the tree is built from the parent links.
+
+Machine: C: is a 512 GB SATA M.2 SSD, about 92% full; the MFT holds 3.78M
+records (about 3.7 GB).
+
+| Scan of `C:\` | Time |
+|---------------|------|
+| Walk of `~` alone (3.48M entries, see above) | 342 s |
+| MFT, whole drive (3.43M files, 428k folders) | 39 to 100 s |
+
+The MFT time is almost all disk reads and varies with the drive's state: the
+same settings took 39 s on 11 Nov and 64 s and 74 s on 12 Nov. Parsing takes
+2 to 6 s, building the tree 3 to 7 s.
+
+### Reader settings (`HOARD_MFT_READERS` x `HOARD_MFT_CHUNK_MB`, one session)
+
+| Readers x MB | Table read | Total |
+|--------------|------------|-------|
+| 1 x 16 | 65.1 s | 74.2 s |
+| 4 x 4 | 90.8 s | 99.8 s |
+| 8 x 2 (default) | 53.5 s | 58.3 s |
+| 4 x 16 | 55.0 s | 61.7 s |
+| 16 x 1 | 66.1 s | 72.2 s |
+
+On this SATA drive, throughput stays around 55 to 70 MB/s however many reads
+are in flight; the spread is run-to-run noise. 8 x 2 was fastest, keeps about
+50 MB of buffers, and favours NVMe drives, which gain from parallel reads.
+
+Accuracy (`hoard compare-mft`): `~/.cargo` and the pnpm store match the walk
+exactly. On the whole home folder totals agree within 0.003%; the remaining
+differences are files that changed between the two scans, plus sparse and
+compressed files where the MFT reports the true allocation.

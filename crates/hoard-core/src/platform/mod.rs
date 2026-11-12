@@ -3,7 +3,7 @@
 //! Everything outside this module calls the common signatures defined here.
 //! Per-OS code lives in `unix.rs`, `windows.rs`, `linux.rs` and `macos.rs`.
 
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -93,6 +93,59 @@ impl DirStat {
     /// diagnostics. Always false outside Windows.
     pub fn is_fast(&self) -> bool {
         self.inner.is_fast()
+    }
+}
+
+/// Random-access reads from a raw volume, or from an image of one in tests.
+pub(crate) trait VolumeRead: Sync {
+    /// Fills `buf` from byte `offset` of the volume. Callers keep `offset`
+    /// and `buf.len()` multiples of the sector size, as devices require.
+    /// Reads are positional, so several threads may read at once; a buffer
+    /// aligned to [`VOLUME_ALIGN`] avoids a bounce copy.
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()>;
+}
+
+/// Buffer alignment that satisfies unbuffered device reads on any sector
+/// size.
+pub(crate) const VOLUME_ALIGN: usize = 4096;
+
+impl VolumeRead for &[u8] {
+    fn read_at(&self, offset: u64, buf: &mut [u8]) -> io::Result<()> {
+        let start = usize::try_from(offset).map_err(|_| io::ErrorKind::UnexpectedEof)?;
+        let src = self
+            .get(start..start.saturating_add(buf.len()))
+            .ok_or(io::ErrorKind::UnexpectedEof)?;
+        buf.copy_from_slice(src);
+        Ok(())
+    }
+}
+
+/// Opens the raw NTFS volume holding `path` for reading its MFT, or `None`
+/// when that is not possible: not Windows, not a local NTFS volume, or not
+/// elevated (raw volume access needs administrator rights).
+pub(crate) fn open_raw_volume(path: &Path) -> Option<Box<dyn VolumeRead + Send>> {
+    #[cfg(windows)]
+    {
+        windows::open_raw_volume(path)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        None
+    }
+}
+
+/// Converts a UTF-16 file name (as NTFS stores it) to an `OsString`. Exact
+/// on Windows, including unpaired surrogates; lossy elsewhere.
+pub(crate) fn os_from_wide(name: &[u16]) -> OsString {
+    #[cfg(windows)]
+    {
+        use std::os::windows::ffi::OsStringExt;
+        OsString::from_wide(name)
+    }
+    #[cfg(not(windows))]
+    {
+        OsString::from(String::from_utf16_lossy(name))
     }
 }
 

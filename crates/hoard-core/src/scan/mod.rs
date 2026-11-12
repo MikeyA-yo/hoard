@@ -9,6 +9,7 @@
 //! Filesystem errors never abort the walk: each becomes a [`ScanError`] and
 //! the affected node is flagged [`NodeFlags::ERROR`].
 
+mod mft;
 mod progress;
 
 use std::collections::HashSet;
@@ -46,6 +47,40 @@ pub struct ScanOptions {
     pub skip: Vec<PathBuf>,
     /// Worker threads; 0 picks a default based on the CPU count.
     pub threads: usize,
+    /// When to read the NTFS Master File Table directly instead of walking
+    /// (Windows, elevated). See [`crate::tree::ScanSource`].
+    #[serde(default)]
+    pub mft: MftMode,
+}
+
+/// When [`scan`] reads the NTFS Master File Table instead of walking.
+///
+/// Reading the MFT costs about the same whatever folder is scanned (the
+/// whole table is read: about a minute for a few million files), while a walk
+/// costs time per entry. So the MFT wins for whole drives and home folders and
+/// loses badly for ordinary folders.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MftMode {
+    /// Use the MFT for a drive root, or the home folder or one of its
+    /// parents, when it can be read. Walk otherwise.
+    #[default]
+    Auto,
+    /// Always walk.
+    Off,
+    /// Use the MFT whenever it can be read (diagnostics).
+    Force,
+}
+
+/// Whether [`MftMode::Auto`] picks the MFT for `root`: a drive root, or the
+/// home folder or one of its parents. Compared case-insensitively, as
+/// Windows paths are.
+fn mft_worthwhile(root: &Path, home: Option<&Path>) -> bool {
+    if root.parent().is_none() {
+        return true;
+    }
+    let lower = |p: &Path| PathBuf::from(p.to_string_lossy().to_lowercase());
+    home.is_some_and(|h| lower(h).starts_with(lower(root)))
 }
 
 /// Which operation failed.
@@ -190,6 +225,43 @@ pub fn scan(
     if root_meta.kind != NodeKind::Dir {
         // Do not hand a symlinked root to jwalk: it always follows the root.
         return Ok(builder.finish(Vec::new(), true));
+    }
+
+    let use_mft = match opts.mft {
+        MftMode::Off => false,
+        MftMode::Force => true,
+        MftMode::Auto => {
+            let home = dirs::home_dir().and_then(|h| std::path::absolute(h).ok());
+            mft_worthwhile(&root_path, home.as_deref())
+        }
+    };
+    if use_mft {
+        if let Some(volume) = platform::open_raw_volume(&root_path) {
+            match mft::scan_volume(
+                volume.as_ref(),
+                &root_path,
+                &root_meta,
+                &opts,
+                size_mode,
+                progress.clone(),
+                &cancel,
+                started,
+            ) {
+                Ok(tree) => {
+                    tracing::debug!(
+                        nodes = tree.len(),
+                        elapsed_ms = started.elapsed().as_millis() as u64,
+                        "MFT scan finished"
+                    );
+                    return Ok(tree);
+                }
+                Err(mft::MftError::Cancelled) => {
+                    return Ok(TreeBuilder::new(root_path, &root_meta, size_mode)
+                        .finish(Vec::new(), false));
+                }
+                Err(e) => tracing::warn!(error = %e, "MFT scan failed, walking instead"),
+            }
+        }
     }
 
     let mut allowed_devs = vec![root_meta.dev];
@@ -479,5 +551,25 @@ impl WalkState {
         });
         top.truncate(BATCH_MAX_ENTRIES);
         let _ = self.sender.try_send(ScanEvent::Batch { top_level: top });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn auto_mft_only_for_drives_and_home() {
+        let (drive, home, users, other) = if cfg!(windows) {
+            (r"C:\", r"C:\Users\me", r"c:\users", r"C:\Users\me\.cargo")
+        } else {
+            ("/", "/home/me", "/home", "/home/me/.cargo")
+        };
+        let h = Some(Path::new(home));
+        assert!(mft_worthwhile(Path::new(drive), h));
+        assert!(mft_worthwhile(Path::new(home), h));
+        assert!(mft_worthwhile(Path::new(users), h));
+        assert!(!mft_worthwhile(Path::new(other), h));
+        assert!(!mft_worthwhile(Path::new(home), None));
     }
 }

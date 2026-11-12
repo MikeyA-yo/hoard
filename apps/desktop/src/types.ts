@@ -70,6 +70,8 @@ export interface Summary {
   complete: boolean;
   sizeMode: SizeMode;
   elapsedMs: number;
+  /** "mft" when the NTFS file table was read directly (Windows, admin). */
+  source: "walk" | "mft";
 }
 
 export interface Done {

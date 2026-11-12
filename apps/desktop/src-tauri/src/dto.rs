@@ -428,6 +428,8 @@ pub struct SummaryDto {
     pub complete: bool,
     pub size_mode: SizeMode,
     pub elapsed_ms: u64,
+    /// How the data was gathered (`walk` or `mft`).
+    pub source: hoard_core::ScanSource,
 }
 
 impl SummaryDto {
@@ -443,6 +445,7 @@ impl SummaryDto {
             error_count: tree.errors().len(),
             complete: tree.is_complete(),
             size_mode: tree.size_mode(),
+            source: tree.source(),
             elapsed_ms,
         }
     }

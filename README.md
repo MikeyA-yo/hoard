@@ -13,7 +13,7 @@ how the code is organised.
 | M2 Cleanup | Done (Windows verified; real Recycle Bin test is manual) |
 | M3 Lenses + suggestions | Done (Windows verified) |
 | M4 Apps, duplicates, history | Done (Windows verified; Apps lens is Windows-only for now) |
-| M5 Platform depth | Not started |
+| M5 Platform depth | In progress (Windows MFT fast path done) |
 
 ## CLI
 
@@ -28,7 +28,20 @@ cargo run --release -p hoard-cli -- suggest ~        # reclaimable space by rule
 ```
 
 Options: `--top N`, `--depth N`, `--apparent`, `--json`, `--cross-fs`,
-`--skip PATH` (repeatable), `--threads N`, `--show-errors N`, `-q`.
+`--skip PATH` (repeatable), `--threads N`, `--show-errors N`, `-q`,
+`--mft auto|off|force`.
+
+On Windows, from an administrator prompt, Hoard can read the NTFS Master File
+Table directly instead of walking folders. Reading the table costs about the
+same whatever is scanned (the whole table is read), so `--mft auto` (the
+default) uses it only for a drive root, the home folder or one of its parents.
+`off` always walks; `force` uses the table whenever it can be read. Without
+admin rights, or on a non-NTFS volume, Hoard walks as usual. The summary line
+says "(read from the NTFS MFT)" when the fast path was used, and the desktop
+app shows "NTFS fast scan".
+
+`hoard compare-mft PATH` (hidden, admin) scans `PATH` both ways and lists
+every difference, for checking the fast path on a real drive.
 
 Sizes default to allocated (on-disk) bytes, shown with binary multiples
 (`1.0 KB` = 1024 bytes). Hard links are counted once, symlinks and junctions

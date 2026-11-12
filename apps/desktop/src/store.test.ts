@@ -32,6 +32,7 @@ const summary: Summary = {
   complete: true,
   sizeMode: "allocated",
   elapsedMs: 1,
+  source: "walk",
 };
 const done = (scanId: number): Done => ({ scanId, summary, error: null });
 

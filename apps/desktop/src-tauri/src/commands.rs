@@ -74,6 +74,7 @@ pub async fn start_scan(
         apparent: opts.apparent,
         skip: opts.skip.into_iter().map(PathBuf::from).collect(),
         threads: 0,
+        mft: hoard_core::MftMode::Auto,
     };
     let root = PathBuf::from(path);
     std::thread::Builder::new()

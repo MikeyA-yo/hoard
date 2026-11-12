@@ -21,6 +21,7 @@ vi.mock("./api", () => ({
         complete: true,
         sizeMode: "allocated",
         elapsedMs: 1,
+        source: "walk",
       }),
     getNode: () => Promise.resolve({ node: { id: 0, flags: [], parent: null }, path: "C:\\x", ancestors: [] }),
     getChildren: () => Promise.resolve({ total: 0, offset: 0, items: [] }),
