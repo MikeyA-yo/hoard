@@ -28,7 +28,7 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 anyhow = "1.0.104"
 crossbeam-channel = "0.5.17"
-hoard-core = { version = "0.1.0", path = "../../../crates/hoard-core" }
+hoard-core = { path = "../../../crates/hoard-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 tauri = { version = "2", features = [] }

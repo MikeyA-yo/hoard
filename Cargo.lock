@@ -1732,7 +1732,7 @@ checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
 name = "hoard-cli"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -1747,7 +1747,7 @@ dependencies = [
 
 [[package]]
 name = "hoard-core"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "blake3",
  "criterion",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "hoard-desktop"
-version = "0.1.0"
+version = "0.1.0-beta.1"
 dependencies = [
  "anyhow",
  "crossbeam-channel",

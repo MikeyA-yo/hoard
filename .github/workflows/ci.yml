@@ -1,0 +1,100 @@
+# Linux checks on every push, and Linux packages for releases.
+# Windows is built and verified locally (windows-gnu toolchain).
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux:
+    name: Linux checks
+    # 22.04 keeps the AppImage compatible with older distributions.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tauri system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Frontend install
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+      - name: Frontend build (the desktop crate embeds it)
+        working-directory: apps/desktop
+        run: pnpm build
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+      - name: Frontend lint and tests
+        working-directory: apps/desktop
+        run: pnpm lint && pnpm test
+
+  linux-packages:
+    name: Linux packages
+    needs: linux
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tauri system libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+      - name: Build .deb and AppImage
+        working-directory: apps/desktop
+        run: pnpm tauri build --bundles deb,appimage
+      - name: Build the CLI
+        run: |
+          cargo build --release -p hoard-cli
+          tar -czf hoard-cli-linux-x86_64.tar.gz -C target/release hoard
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hoard-linux
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+            hoard-cli-linux-x86_64.tar.gz
+      - name: Attach to the GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${GITHUB_REF_NAME}" \
+            target/release/bundle/deb/*.deb \
+            target/release/bundle/appimage/*.AppImage \
+            hoard-cli-linux-x86_64.tar.gz --clobber

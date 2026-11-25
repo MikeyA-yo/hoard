@@ -24,7 +24,15 @@ import type {
 } from "./types";
 
 export type Screen = "home" | "scanning" | "results";
-export type MainView = "map" | "suggestions" | "projects" | "types" | "duplicates" | "apps" | "history";
+export type MainView =
+  | "map"
+  | "suggestions"
+  | "projects"
+  | "types"
+  | "duplicates"
+  | "apps"
+  | "docker"
+  | "history";
 
 /** A duplicate search. `runId` is generated here before the backend is called. */
 export type DupesRun =

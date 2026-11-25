@@ -11,6 +11,7 @@ import { ProjectsView } from "./ProjectsView";
 import { FileTypesView } from "./FileTypesView";
 import { DuplicatesView } from "./DuplicatesView";
 import { AppsView } from "./AppsView";
+import { DockerView } from "./DockerView";
 import { HistoryView, GrowthBanner } from "./HistoryView";
 
 const TABS: { key: SideTab; label: string }[] = [
@@ -135,6 +136,9 @@ export function ResultsScreen() {
           <button className={mainView === "apps" ? "on" : ""} onClick={() => setMainView("apps")}>
             Apps
           </button>
+          <button className={mainView === "docker" ? "on" : ""} onClick={() => setMainView("docker")}>
+            Docker
+          </button>
           <button className={mainView === "history" ? "on" : ""} onClick={() => setMainView("history")}>
             History
           </button>
@@ -192,6 +196,7 @@ export function ResultsScreen() {
         {mainView === "types" && <FileTypesView />}
         {mainView === "duplicates" && <DuplicatesView />}
         {mainView === "apps" && <AppsView />}
+        {mainView === "docker" && <DockerView />}
         {mainView === "history" && <HistoryView />}
         <aside className="side">
           <div className="tabs" role="tablist">

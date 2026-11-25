@@ -1,6 +1,7 @@
 //! `hoard`: command line front end for `hoard-core`.
 
 mod compare;
+mod docker;
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -29,6 +30,12 @@ enum Command {
     Scan(ScanArgs),
     /// Scan and list reclaimable space found by the built-in rules.
     Suggest(SuggestArgs),
+    /// Show Docker's disk usage and the commands that free it (read-only).
+    Docker {
+        /// Print machine-readable JSON.
+        #[arg(long)]
+        json: bool,
+    },
     /// Diagnostic: scan by walking and from the NTFS MFT, and list every
     /// difference (Windows, administrator prompt).
     #[command(hide = true)]
@@ -122,6 +129,7 @@ fn main() -> Result<()> {
     match Cli::parse().command {
         Command::Scan(args) => run_scan(args),
         Command::Suggest(args) => run_suggest(args),
+        Command::Docker { json } => docker::run(json),
         Command::CompareMft { path, quiet } => compare::run(&path, quiet),
     }
 }

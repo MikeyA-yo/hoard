@@ -18,7 +18,7 @@ use std::sync::OnceLock;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::dto::{
-    AppsDto, CategoryTotalDto, DiffEntryDto, DupFileDto, DupGroupDto, DupesPageDto,
+    AppsDto, CategoryTotalDto, DiffEntryDto, DockerDto, DupFileDto, DupGroupDto, DupesPageDto,
     DupesProgressDto, DupesSummaryDto, GrowthDto, HistoryDto, ProjectsDto, SnapshotDto,
     SuggestionsDto, TrashSizeDto,
 };
@@ -884,4 +884,55 @@ fn unix_now() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+// ------------------------------------------------------------------ docker
+
+/// Docker's disk usage and the commands that free it. Independent of the
+/// scan; runs `docker system df` off the async runtime (it can take up to
+/// about 20 s while Docker Desktop starts).
+#[tauri::command]
+pub async fn get_docker() -> CmdResult<DockerDto> {
+    tauri::async_runtime::spawn_blocking(hoard_core::docker::report)
+        .await
+        .map(DockerDto::from)
+        .map_err(|e| format!("reading Docker usage failed: {e}"))
+}
+
+// ------------------------------------------------------------------ about
+
+/// Where testers report problems.
+const ISSUES_URL: &str = "https://github.com/MikeyA-yo/hoard/issues/new";
+
+/// The app version (from `tauri.conf.json`).
+#[tauri::command]
+pub fn app_version(app: AppHandle) -> String {
+    app.package_info().version.to_string()
+}
+
+/// Opens a new GitHub issue in the browser, pre-filled with the version and
+/// OS. The URL is fixed here, so the webview never needs permission to open
+/// arbitrary links.
+#[tauri::command]
+pub fn report_bug(app: AppHandle) -> CmdResult<()> {
+    let body = format!(
+        "Hoard {} on {} ({})\n\nWhat happened:\n\nWhat you expected:\n\nSteps to reproduce:\n",
+        app.package_info().version,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
+    let url = format!("{ISSUES_URL}?labels=beta&body={}", percent_encode(&body));
+    tauri_plugin_opener::open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
+/// Percent-encodes everything but unreserved URL characters.
+fn percent_encode(s: &str) -> String {
+    s.bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect()
 }

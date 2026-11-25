@@ -213,3 +213,96 @@ pub fn extra_skips(root: &Path) -> Vec<PathBuf> {
         Vec::new()
     }
 }
+
+/// Where Docker Desktop keeps its disk image on this OS. Candidates only;
+/// they may not exist.
+pub fn docker_disk_images() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        // Docker Desktop 4.30 and later, then the older data distro.
+        dirs::data_local_dir()
+            .map(|l| {
+                vec![
+                    l.join(r"Docker\wsl\disk\docker_data.vhdx"),
+                    l.join(r"Docker\wsl\data\ext4.vhdx"),
+                ]
+            })
+            .unwrap_or_default()
+    }
+    #[cfg(target_os = "macos")]
+    {
+        dirs::home_dir()
+            .map(
+                |h| vec![h.join("Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw")],
+            )
+            .unwrap_or_default()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        // Docker Desktop for Linux; Docker Engine keeps data in
+        // /var/lib/docker instead, with no disk image.
+        dirs::home_dir()
+            .map(|h| vec![h.join(".docker/desktop/vms/0/data/Docker.raw")])
+            .unwrap_or_default()
+    }
+}
+
+/// Where the `docker` command usually lives when it is not on `PATH` (apps
+/// started from a desktop shell may not see the user's `PATH`).
+pub fn docker_cli_candidates() -> Vec<PathBuf> {
+    #[cfg(windows)]
+    {
+        let program_files = std::env::var_os("ProgramFiles")
+            .map_or_else(|| PathBuf::from(r"C:\Program Files"), PathBuf::from);
+        vec![program_files.join(r"Docker\Docker\resources\bin\docker.exe")]
+    }
+    #[cfg(target_os = "macos")]
+    {
+        [
+            "/usr/local/bin/docker",
+            "/opt/homebrew/bin/docker",
+            "/Applications/Docker.app/Contents/Resources/bin/docker",
+        ]
+        .into_iter()
+        .map(PathBuf::from)
+        .collect()
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        ["/usr/bin/docker", "/usr/local/bin/docker"]
+            .into_iter()
+            .map(PathBuf::from)
+            .collect()
+    }
+}
+
+/// Keeps a child process from opening a console window (Windows GUI apps).
+pub(crate) fn hide_console(cmd: &mut std::process::Command) {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        /// `CREATE_NO_WINDOW`.
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = cmd;
+    }
+}
+
+/// Whether `path` is a sparse file (space freed inside it goes back to the
+/// drive by itself). Never follows links.
+pub fn is_sparse(path: &Path) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        /// `FILE_ATTRIBUTE_SPARSE_FILE`.
+        const SPARSE: u32 = 0x200;
+        std::fs::symlink_metadata(path).is_ok_and(|m| m.file_attributes() & SPARSE != 0)
+    }
+    #[cfg(not(windows))]
+    {
+        stat(path).is_ok_and(|m| m.size_allocated < m.size_apparent)
+    }
+}

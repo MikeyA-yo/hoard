@@ -1,8 +1,8 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "Hoard",
-  "version": "0.1.0",
-  "identifier": "dev.hoard.app",
+  "version": "0.1.0-beta.1",
+  "identifier": "dev.hoard.desktop",
   "build": {
     "beforeDevCommand": "pnpm dev",
     "devUrl": "http://localhost:5173",
@@ -25,13 +25,34 @@
     }
   },
   "bundle": {
-    "active": false,
+    "active": true,
+    "targets": [
+      "nsis",
+      "deb",
+      "appimage"
+    ],
+    "publisher": "Oluwatola Ayomide",
+    "copyright": "Copyright (c) 2026 Oluwatola Ayomide. MIT licence.",
+    "category": "Utility",
+    "shortDescription": "See what is using your disk space and clean up safely",
+    "longDescription": "Hoard scans a drive or folder, shows what is using space as a treemap and lists, explains what is safe to remove, and cleans up through a reviewed tray with Recycle Bin and permanent modes.",
+    "homepage": "https://github.com/MikeyA-yo/hoard",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser"
+      }
+    },
+    "linux": {
+      "deb": {
+        "section": "utils"
+      }
+    }
   }
 }

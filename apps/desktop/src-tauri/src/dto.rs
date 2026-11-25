@@ -5,6 +5,7 @@ use hoard_core::apps::{AppFolder, AppFootprint, Confidence};
 use hoard_core::classify::{category_for, Category};
 use hoard_core::cleanup::{CleanupMode, CleanupReport, Tray};
 use hoard_core::disks::DiskInfo;
+use hoard_core::docker::{DockerReport, Engine};
 use hoard_core::lenses::{CategoryTotal, Project};
 use hoard_core::rules::{Group as RuleGroupKind, RuleMatches, Safety};
 use hoard_core::snapshot::{ChangeKind, DiffEntry};
@@ -733,6 +734,99 @@ impl AppsDto {
                     total: fp.total,
                     install: fp.install.as_ref().and_then(folder),
                     data: fp.data.iter().filter_map(folder).collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+// ------------------------------------------------------------------ docker
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerCategoryDto {
+    pub name: &'static str,
+    pub total: u64,
+    pub active: u64,
+    pub size: u64,
+    pub reclaimable: u64,
+    pub safety: Safety,
+    pub command: &'static str,
+    pub explain: &'static str,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerStepDto {
+    pub text: String,
+    pub command: Option<String>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerDiskDto {
+    pub path: String,
+    pub allocated: u64,
+    /// Steps to shrink it after pruning; `null` when it shrinks by itself.
+    pub compact: Option<Vec<DockerStepDto>>,
+}
+
+/// Docker's usage. `status` is `running` (with `categories`),
+/// `notInstalled`, `unavailable` or `timedOut` (with `reason`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DockerDto {
+    pub status: &'static str,
+    pub reason: Option<String>,
+    pub categories: Vec<DockerCategoryDto>,
+    pub prune_all: &'static str,
+    pub disk_images: Vec<DockerDiskDto>,
+}
+
+impl From<DockerReport> for DockerDto {
+    fn from(r: DockerReport) -> Self {
+        let (status, reason, categories) = match r.engine {
+            Engine::Running { categories } => ("running", None, categories),
+            Engine::NotInstalled => ("notInstalled", None, Vec::new()),
+            Engine::Unavailable { reason } => ("unavailable", Some(reason), Vec::new()),
+            Engine::TimedOut { seconds } => (
+                "timedOut",
+                Some(format!("Docker did not answer within {seconds} seconds")),
+                Vec::new(),
+            ),
+        };
+        DockerDto {
+            status,
+            reason,
+            categories: categories
+                .into_iter()
+                .map(|c| DockerCategoryDto {
+                    name: c.name,
+                    total: c.total,
+                    active: c.active,
+                    size: c.size,
+                    reclaimable: c.reclaimable,
+                    safety: c.safety,
+                    command: c.command,
+                    explain: c.explain,
+                })
+                .collect(),
+            prune_all: r.prune_all,
+            disk_images: r
+                .disk_images
+                .into_iter()
+                .map(|d| DockerDiskDto {
+                    path: d.path.to_string_lossy().into_owned(),
+                    allocated: d.allocated,
+                    compact: d.compact.map(|steps| {
+                        steps
+                            .into_iter()
+                            .map(|s| DockerStepDto {
+                                text: s.text,
+                                command: s.command,
+                            })
+                            .collect()
+                    }),
                 })
                 .collect(),
         }

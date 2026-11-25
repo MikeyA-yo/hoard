@@ -13,7 +13,24 @@ how the code is organised.
 | M2 Cleanup | Done (Windows verified; real Recycle Bin test is manual) |
 | M3 Lenses + suggestions | Done (Windows verified) |
 | M4 Apps, duplicates, history | Done (Windows verified; Apps lens is Windows-only for now) |
-| M5 Platform depth | In progress (Windows MFT fast path done) |
+| M5 Platform depth | In progress (Windows MFT fast path and Docker view done) |
+
+## Install the beta
+
+Download the latest pre-release from
+[Releases](https://github.com/MikeyA-yo/hoard/releases).
+
+- **Windows 10/11:** run `Hoard_<version>_x64-setup.exe`. It installs for
+  your user only, no administrator rights needed. The beta is not code-signed
+  yet, so Windows may show "Windows protected your PC": click **More info**,
+  then **Run anyway**.
+- **Linux (x86_64):** install the `.deb` (`sudo apt install ./Hoard_*.deb`) or
+  make the `.AppImage` executable and run it. Linux builds are new in this
+  beta; please report anything odd.
+
+Cleanup sends items to the Recycle Bin / Trash by default, and every action is
+written to a log. Report bugs and ideas with **Report a bug or idea** on the
+home screen, or open an [issue](https://github.com/MikeyA-yo/hoard/issues).
 
 ## CLI
 
@@ -39,6 +56,12 @@ default) uses it only for a drive root, the home folder or one of its parents.
 admin rights, or on a non-NTFS volume, Hoard walks as usual. The summary line
 says "(read from the NTFS MFT)" when the fast path was used, and the desktop
 app shows "NTFS fast scan".
+
+`hoard docker` shows what Docker's images, containers, volumes and build
+cache take, with the Docker command that frees each (`--json` for scripts).
+Hoard never runs those commands. On Windows it also shows Docker Desktop's disk
+image, which does not shrink after pruning, and the steps to compact it. The
+desktop app has the same in its Docker tab.
 
 `hoard compare-mft PATH` (hidden, admin) scans `PATH` both ways and lists
 every difference, for checking the fast path on a real drive.

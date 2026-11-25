@@ -10,6 +10,7 @@ import type {
   Apps,
   CategoryTotal,
   DiffEntry,
+  Docker,
   DupesPage,
   DupesProgress,
   DupesSummary,
@@ -78,6 +79,11 @@ export const api = {
   diffSnapshots: (older: number, newer: number, mode: SizeMode, limit: number) =>
     invoke<DiffEntry[]>("diff_snapshots", { older, newer, mode, limit }),
   getApps: () => invoke<Apps>("get_apps"),
+  appVersion: () => invoke<string>("app_version"),
+  /** Opens a pre-filled GitHub issue in the browser. */
+  reportBug: () => invoke<null>("report_bug"),
+  /** Read-only; can take a while when Docker Desktop is starting. */
+  getDocker: () => invoke<Docker>("get_docker"),
   /** `ruleId` null adds every Safe item; only Safe rules can be bulk-added. */
   addSuggestionsToTray: (ruleId: string | null) => invoke<Tray>("add_suggestions_to_tray", { ruleId }),
 };

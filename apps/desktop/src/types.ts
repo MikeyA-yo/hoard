@@ -355,3 +355,36 @@ export interface Apps {
   apps: AppInfo[];
   registered: number;
 }
+
+// ------------------------------------------------------------------ M5: docker
+
+export interface DockerCategory {
+  name: string;
+  total: number;
+  active: number;
+  size: number;
+  reclaimable: number;
+  safety: Safety;
+  command: string;
+  explain: string;
+}
+
+export interface DockerStep {
+  text: string;
+  command: string | null;
+}
+
+export interface DockerDisk {
+  path: string;
+  allocated: number;
+  /** Steps to shrink it after pruning; null when it shrinks by itself. */
+  compact: DockerStep[] | null;
+}
+
+export interface Docker {
+  status: "running" | "notInstalled" | "unavailable" | "timedOut";
+  reason: string | null;
+  categories: DockerCategory[];
+  pruneAll: string;
+  diskImages: DockerDisk[];
+}

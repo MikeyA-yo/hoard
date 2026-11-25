@@ -19,6 +19,7 @@ pub mod apps;
 pub mod classify;
 pub mod cleanup;
 pub mod disks;
+pub mod docker;
 pub mod dupes;
 pub mod error;
 pub mod format;

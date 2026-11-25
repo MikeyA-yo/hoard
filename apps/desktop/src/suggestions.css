@@ -330,3 +330,43 @@
   margin: 0 0 4px;
   font-size: 14px;
 }
+
+/* M5: docker */
+.docker-intro {
+  flex: 1;
+  min-width: 240px;
+}
+.docker-note {
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
+}
+.docker-cmd {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+}
+.docker-cmd pre {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: text;
+}
+.docker-steps {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+.docker-steps li {
+  margin-bottom: 8px;
+}
+.path-line {
+  margin: 4px 0;
+  overflow-wrap: anywhere;
+}

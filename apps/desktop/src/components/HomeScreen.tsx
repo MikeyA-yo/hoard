@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { pickFolder } from "../api";
+import { api, errorMessage, pickFolder } from "../api";
 import { useHoard } from "../store";
 import { formatBytes, formatPercent } from "../lib/format";
 
@@ -10,10 +10,29 @@ export function HomeScreen() {
   const loadTargets = useHoard((s) => s.loadTargets);
   const startScan = useHoard((s) => s.startScan);
   const [crossFs, setCrossFs] = useState(false);
+  const [version, setVersion] = useState<string | null>(null);
+  const showToast = useHoard((s) => s.showToast);
 
   useEffect(() => {
     void loadTargets();
   }, [loadTargets]);
+
+  useEffect(() => {
+    let stale = false;
+    api.appVersion().then(
+      (v) => {
+        if (!stale) setVersion(v);
+      },
+      () => {},
+    );
+    return () => {
+      stale = true;
+    };
+  }, []);
+
+  const reportBug = () => {
+    api.reportBug().catch((e: unknown) => showToast(errorMessage(e)));
+  };
 
   const scan = (path: string) => void startScan(path, { crossFilesystems: crossFs });
 
@@ -75,6 +94,13 @@ export function HomeScreen() {
         <input type="checkbox" checked={crossFs} onChange={(e) => setCrossFs(e.target.checked)} />
         Include other drives mounted inside the folder
       </label>
+
+      <footer className="home-footer muted small">
+        <span>Hoard {version ?? ""} beta</span>
+        <button className="link-btn" onClick={reportBug}>
+          Report a bug or idea
+        </button>
+      </footer>
     </div>
   );
 }
